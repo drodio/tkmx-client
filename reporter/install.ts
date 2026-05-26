@@ -10,6 +10,17 @@ export const REPORT_SCRIPT = path.join(PROJECT_ROOT, "dist", "reporter", "report
 export const LAUNCHD_LABEL = "com.token-tracking.reporter";
 export const SYSTEMD_UNIT_BASENAME = "token-tracking-reporter";
 
+// agentsview's "claude" query triggers a full all-source sync, which includes
+// a Warp parser that reads Warp's sqlite from a macOS App Group Container
+// (~/Library/Group Containers/2BBY89MBSN.dev.warp/.../warp.sqlite). An
+// unattended launchd/systemd agent has no Full Disk Access, so that open()
+// *blocks* (rather than failing fast) until the 180s timeout, killing the run
+// before it can POST. We only report Claude+Codex, so we point WARP_DIR at an
+// always-empty dir: the parser finds no warp.sqlite there and skips Warp
+// entirely. /var/empty exists on macOS and most Linux; if absent, the lookup
+// still just ENOENTs, which is the behavior we want.
+export const WARP_DIR_OVERRIDE = "/var/empty";
+
 // `process.execPath` points at the real on-disk node binary, which on Homebrew
 // is a versioned Cellar path like `/opt/homebrew/Cellar/node/25.8.1_1/bin/node`.
 // Baking that into a launchd plist is a ticking time bomb: the next
@@ -67,6 +78,8 @@ export function buildLaunchdPlist({ label, nodePath, reportScript, workingDir, l
   <dict>
     <key>PATH</key>
     <string>${path.dirname(nodePath)}:/usr/local/bin:/usr/bin:/bin</string>
+    <key>WARP_DIR</key>
+    <string>${WARP_DIR_OVERRIDE}</string>
   </dict>
   <key>WorkingDirectory</key>
   <string>${workingDir}</string>
@@ -98,6 +111,7 @@ Type=oneshot
 ExecStart=${nodePath} ${reportScript}
 WorkingDirectory=${workingDir}
 Environment=PATH=${path.dirname(nodePath)}:/usr/local/bin:/usr/bin:/bin
+Environment=WARP_DIR=${WARP_DIR_OVERRIDE}
 
 [Install]
 WantedBy=default.target
