@@ -6,6 +6,13 @@ import * as fs from "node:fs";
 
 import { parseAgentsviewOutput, toIsoDate, collectAgentsviewUsage } from "../reporter/agentsview";
 
+// Write an executable fixture (default: a no-op shell stub) and mark it +x.
+function writeExec(p, body = "#!/bin/sh\n") {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, body);
+  fs.chmodSync(p, 0o755);
+}
+
 describe("toIsoDate", () => {
   it("converts YYYYMMDD to YYYY-MM-DD", () => {
     assert.equal(toIsoDate("20260413"), "2026-04-13");
@@ -106,11 +113,10 @@ describe("collectAgentsviewUsage WARP_DIR scoping", () => {
     try {
       const logPath = path.join(tmp, "calls.log");
       const fakeBin = path.join(tmp, "agentsview");
-      fs.writeFileSync(
+      writeExec(
         fakeBin,
         `#!/bin/sh\necho "WARP_DIR=\${WARP_DIR}|$*" >> "${logPath}"\necho '{"daily":[]}'\n`,
       );
-      fs.chmodSync(fakeBin, 0o755);
 
       collectAgentsviewUsage(fakeBin, "20260501");
 
@@ -148,12 +154,6 @@ describe("resolveAgentsview", () => {
       else process.env.AGENTSVIEW_BIN = origBin;
       fs.rmSync(tmp, { recursive: true, force: true });
     }
-  }
-
-  function writeExec(p, body = "#!/bin/sh\n") {
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, body);
-    fs.chmodSync(p, 0o755);
   }
 
   it("returns null when no candidate path exists", () => {
