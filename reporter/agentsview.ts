@@ -120,6 +120,18 @@ export function parseAgentsviewOutput(parsed: AgentsviewJson, source: string): D
   });
 }
 
+// agentsview's syncing pass (no --no-sync) runs its full parser registry,
+// including a Warp parser that reads Warp's sqlite from a macOS App Group
+// Container (~/Library/Group Containers/2BBY89MBSN.dev.warp/.../warp.sqlite).
+// An unattended launchd/systemd daemon has no Full Disk Access, so that
+// open() *blocks* (rather than failing fast) until the timeout, killing the
+// run before it can POST. We only report Claude+Codex, so syncing calls point
+// WARP_DIR at an always-empty dir: the parser finds no warp.sqlite there and
+// skips Warp. --no-sync passes don't run the parser, so they're untouched.
+// Living on the query (not the OS-unit env) means existing installs get the
+// fix on a plain `npm install` rebuild, with no daemon-unit regeneration.
+const WARP_SKIP_DIR = "/var/empty";
+
 function queryAgent(
   bin: string,
   since: string,
@@ -131,7 +143,9 @@ function queryAgent(
   const args = ["usage", "daily", "--json", "--breakdown", "--agent", agent, "--since", since];
   if (noSync) args.push("--no-sync");
   const execOpts: Parameters<typeof execFileSync>[2] = { encoding: "utf-8", timeout: timeoutMs };
-  if (extraEnv) execOpts.env = { ...process.env, ...extraEnv };
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
+  if (!noSync) env.WARP_DIR = WARP_SKIP_DIR;
+  execOpts.env = env;
   let raw: string;
   try {
     raw = execFileSync(bin, args, execOpts) as string;

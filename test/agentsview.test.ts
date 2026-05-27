@@ -4,7 +4,14 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs";
 
-import { parseAgentsviewOutput, toIsoDate } from "../reporter/agentsview";
+import { parseAgentsviewOutput, toIsoDate, collectAgentsviewUsage } from "../reporter/agentsview";
+
+// Write an executable fixture (default: a no-op shell stub) and mark it +x.
+function writeExec(p, body = "#!/bin/sh\n") {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, body);
+  fs.chmodSync(p, 0o755);
+}
 
 describe("toIsoDate", () => {
   it("converts YYYYMMDD to YYYY-MM-DD", () => {
@@ -96,6 +103,35 @@ describe("parseAgentsviewOutput", () => {
   });
 });
 
+describe("collectAgentsviewUsage WARP_DIR scoping", () => {
+  // A fake agentsview that records the WARP_DIR it received plus its args,
+  // then emits empty daily JSON so the caller parses cleanly. Proves the
+  // Warp-skip is scoped to the syncing call (the only one that runs the
+  // parser registry that hangs an unattended daemon), not the --no-sync one.
+  it("sets WARP_DIR=/var/empty on the syncing claude call but not the --no-sync codex call", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-warp-"));
+    try {
+      const logPath = path.join(tmp, "calls.log");
+      const fakeBin = path.join(tmp, "agentsview");
+      writeExec(
+        fakeBin,
+        `#!/bin/sh\necho "WARP_DIR=\${WARP_DIR}|$*" >> "${logPath}"\necho '{"daily":[]}'\n`,
+      );
+
+      collectAgentsviewUsage(fakeBin, "20260501");
+
+      const lines = fs.readFileSync(logPath, "utf-8").trim().split("\n");
+      const claudeLine = lines.find((l) => l.includes("--agent claude"));
+      const codexLine = lines.find((l) => l.includes("--agent codex"));
+      assert.match(claudeLine, /WARP_DIR=\/var\/empty\|/);
+      assert.ok(codexLine.includes("--no-sync"), "codex call should pass --no-sync");
+      assert.doesNotMatch(codexLine, /WARP_DIR=\/var\/empty\|/);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("resolveAgentsview", () => {
   // Isolate each case from the host's real agentsview install and any
   // ambient AGENTSVIEW_BIN env var. Tests that need $PATH to find
@@ -118,12 +154,6 @@ describe("resolveAgentsview", () => {
       else process.env.AGENTSVIEW_BIN = origBin;
       fs.rmSync(tmp, { recursive: true, force: true });
     }
-  }
-
-  function writeExec(p, body = "#!/bin/sh\n") {
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, body);
-    fs.chmodSync(p, 0o755);
   }
 
   it("returns null when no candidate path exists", () => {
