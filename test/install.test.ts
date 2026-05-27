@@ -110,11 +110,6 @@ describe("buildLaunchdPlist", () => {
   });
 
   it("points WARP_DIR at an empty dir so the daemon skips Warp's sandboxed DB", () => {
-    // Without Full Disk Access, a launchd agent's open() on Warp's group-
-    // container sqlite (~/Library/Group Containers/.../warp.sqlite) blocks
-    // until the 180s timeout, killing the run before it can POST. tkmx only
-    // reports Claude+Codex, so redirecting agentsview's Warp parser to an
-    // empty dir is harmless and stops the hang.
     const plist = buildLaunchdPlist(inputs);
     assert.match(plist, /<key>WARP_DIR<\/key>\s*<string>\/var\/empty<\/string>/);
   });

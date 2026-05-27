@@ -19,7 +19,7 @@ export const SYSTEMD_UNIT_BASENAME = "token-tracking-reporter";
 // always-empty dir: the parser finds no warp.sqlite there and skips Warp
 // entirely. /var/empty exists on macOS and most Linux; if absent, the lookup
 // still just ENOENTs, which is the behavior we want.
-export const WARP_DIR_OVERRIDE = "/var/empty";
+const WARP_DIR_OVERRIDE = "/var/empty";
 
 // `process.execPath` points at the real on-disk node binary, which on Homebrew
 // is a versioned Cellar path like `/opt/homebrew/Cellar/node/25.8.1_1/bin/node`.
