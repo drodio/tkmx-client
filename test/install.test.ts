@@ -109,11 +109,6 @@ describe("buildLaunchdPlist", () => {
     assert.match(plist, /<string>\/opt\/homebrew\/bin:\/usr\/local\/bin:\/usr\/bin:\/bin<\/string>/);
   });
 
-  it("points WARP_DIR at an empty dir so the daemon skips Warp's sandboxed DB", () => {
-    const plist = buildLaunchdPlist(inputs);
-    assert.match(plist, /<key>WARP_DIR<\/key>\s*<string>\/var\/empty<\/string>/);
-  });
-
   it("uses the supplied label", () => {
     const plist = buildLaunchdPlist(inputs);
     assert.match(plist, /<key>Label<\/key>\s*<string>com\.test\.reporter<\/string>/);
@@ -140,11 +135,6 @@ describe("buildSystemdService", () => {
   it("PATH includes the node binary's parent dir", () => {
     const unit = buildSystemdService(inputs);
     assert.match(unit, /^Environment=PATH=\/usr\/bin:\/usr\/local\/bin:\/usr\/bin:\/bin$/m);
-  });
-
-  it("sets WARP_DIR to an empty dir so the unattended sync skips Warp", () => {
-    const unit = buildSystemdService(inputs);
-    assert.match(unit, /^Environment=WARP_DIR=\/var\/empty$/m);
   });
 });
 

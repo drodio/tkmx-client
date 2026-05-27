@@ -134,15 +134,12 @@ systemctl --user status token-tracking-reporter.timer
 ```bash
 cd tkmx-client
 git pull
-npm install             # rebuilds dist/ via the prepare hook
-npm run install-service # regenerate the daemon unit so template/env changes take effect
+npm install        # rebuilds dist/ via the prepare hook
 ```
-
-Re-running `install-service` rewrites your already-installed launchd plist / systemd unit. This is required whenever a release changes the generated daemon environment — e.g. this one adds `WARP_DIR` to stop an unattended-sync hang, which an existing unit won't pick up otherwise.
 
 Your existing config (credentials, `CLIENT_ID`) is preserved — `git pull` never touches `.env`. **Do not re-clone or delete `.env` as an "update" — see the CLIENT_ID warning in [First run](#5-first-run).**
 
-> **Pre-TypeScript installs:** if your launchd plist or systemd unit was installed before the TypeScript migration, it still points at `reporter/report.js`. A compatibility shim at that path forwards to the compiled `dist/reporter/report.js`, so the daemon keeps working until the `install-service` step above regenerates a clean unit pointing at `dist/` directly — the shim can then be removed in a future release.
+> **Pre-TypeScript installs:** if your launchd plist or systemd unit was installed before the TypeScript migration, it still points at `reporter/report.js`. A compatibility shim at that path forwards to the compiled `dist/reporter/report.js`, so the daemon keeps working. To get a clean unit pointing at `dist/` directly, re-run `npm run install-service` once after this update — the shim can then be removed in a future release.
 
 ### What's new
 
