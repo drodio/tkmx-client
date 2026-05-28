@@ -89,6 +89,7 @@ cp .env.example .env
 | `ABOUT` | No | The main content of your profile — describe your setup, link to tools you use, share blog posts/videos about your workflow. URLs are auto-linked. See [Profile Page](#profile-page) |
 | `DEMO_VIDEO_URL` | No | YouTube URL (**3 min or shorter**) showing your before/after AI coding workflow. Embedded on your profile page under "3-MIN DEMO VIDEO". |
 | `HN_USERNAME` | No | Your Hacker News username (e.g. `Sam_Odio`). Required to appear on the leaderboard — see [HN Verification](#appearing-on-the-leaderboard-hn-verification) |
+| `OPENCLAW_SESSIONS_DIRS` | No | Override OpenClaw auto-discovery with a comma-separated list of session directories. Defaults to auto-discovery of standalone + Plow variants on macOS. See [OpenClaw Usage](#openclaw-usage). |
 | `REPORT_DAYS` | No | Days of history to report (default: `28`). See [Backfill & Optimization](#backfill--optimization) |
 | `REPORT_MACHINE_CONFIG` | No | Set to `true` to share machine info (OS, CPU, memory, installed skills, MCP servers, hooks, CLAUDE.md stats, shell/editor) on your profile. No prompts, code, or keys are ever sent. |
 | `REPORT_DEV_STATS` | No | Set to `true` to share how you code — tool-call frequencies, session stats, cache efficiency, git outcome metrics (commits/LOC/PRs), and Cursor AI attribution. No file paths, prompts, or code are ever sent. See [Dev Stats](#dev-stats). |
@@ -109,7 +110,7 @@ npm run report
 
 A `CLIENT_ID` is auto-generated on first run and saved to `.env`. This identifies your machine so multiple machines can report for the same username without overwriting each other.
 
-> **⚠ Don't touch `CLIENT_ID` once it's set.** Usage rows are keyed on `(username, date, model, client_id)` server-side. If you delete `.env`, re-clone into a new directory, or paste a fresh `.env` that omits the line, a new id is generated and the server treats your machine as brand new — the old id's rows stay behind and every overlapping date gets double-counted on your profile. When updating, always `git pull` in place rather than re-cloning. If you must re-clone, copy `CLIENT_ID` from the old `.env` first.
+> **⚠ Don't touch `CLIENT_ID` once it's set.** Usage rows are keyed on `(username, date, model, client_id, source)` server-side. If you delete `.env`, re-clone into a new directory, or paste a fresh `.env` that omits the line, a new id is generated and the server treats your machine as brand new — the old id's rows stay behind and every overlapping date gets double-counted on your profile. When updating, always `git pull` in place rather than re-cloning. If you must re-clone, copy `CLIENT_ID` from the old `.env` first.
 
 ### 6. Install the background service
 
@@ -230,6 +231,25 @@ The client only *reads* usage data; it never sends your admin key anywhere excep
 
 > **⚠️ Don't double-count Codex CLI:** If your Codex CLI is authenticated with an OpenAI API key (rather than a ChatGPT Plus/Pro subscription), its traffic already appears in platform usage. Enabling `OPENAI_ADMIN_KEY` alongside Codex collection will double-count those tokens. Leave `OPENAI_ADMIN_KEY` unset if Codex is on API-key auth.
 
+## OpenClaw Usage
+
+If you run [OpenClaw](https://openclaw.ai) sessions locally — standalone or wrapped by [Plow](https://plow.co) on macOS — token usage is read directly from session JSONL transcripts and merged into your reports under the `openclaw` source. No setup required: the reporter auto-discovers session directories on each run.
+
+**Discovery paths (macOS):**
+
+- Standalone install: `~/.openclaw/agents/main/sessions/`
+- Plow (any variant): `~/Library/Application Support/co.plow.app*/openclaw/gateway/agents/main/sessions/` — picks up `co.plow.app`, `co.plow.app.dev`, `co.plow.app.wt1`, dev/worktree variants, etc.
+
+**Other platforms:** Only the standalone path is probed. Plow is macOS-only.
+
+To point the reporter at non-default install locations (or to scope reporting to a subset of installs), set `OPENCLAW_SESSIONS_DIRS` in `.env` to one or more sessions directories, comma-separated:
+
+```
+OPENCLAW_SESSIONS_DIRS=/custom/path/agents/main/sessions,/another/path/agents/main/sessions
+```
+
+The override replaces the auto-discovered list entirely. Each directory is scanned for `*.jsonl` files; `*.trajectory.jsonl` and `sessions.json` are ignored. Cross-file and cross-root duplicates are deduped by each LLM call's `responseId`, so running multiple Plow variants that share OpenClaw data won't double-count.
+
 ## Profile Page
 
 Each user gets a shareable profile at `https://tokenmaxxing.odio.dev/user/YOUR_NAME` showing:
@@ -337,7 +357,7 @@ You don't need to worry about pricing — the server handles it.
 
 When `EXTRA_CLAUDE_CONFIGS` is set, the reporter runs one agentsview invocation per remote dir, each with its own `AGENT_VIEWER_DATA_DIR` (under `~/.agentsview-tkmx/<hash>/`) and `CLAUDE_PROJECTS_DIR` (pointing at the remote `.claude/projects`). This keeps each remote mirror in its own isolated sqlite — incremental sync works per-dir and the local machine's `~/.agentsview/sessions.db` stays clean.
 
-The reporter merges Claude + Codex daily usage client-side and POSTs it to the Tokenmaxxing server. Each report replaces previous data for the same machine and date range, so re-syncs are safe and idempotent.
+The reporter merges daily token-usage rows from all enabled sources (Claude, Codex, OpenAI platform, OpenClaw) client-side into `body.data` and POSTs them to the Tokenmaxxing server. Cursor stats and session stats ship in separate body fields (`cursor_stats`, `session_stats`) — they are wholesale-replaced rolling-window blobs, not per-day token rows. Each report replaces previous data for the same machine and date range, so re-syncs are safe and idempotent.
 
 ## Logs
 

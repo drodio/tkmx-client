@@ -12,6 +12,7 @@ import {
   detectAgentsviewVersion,
 } from "./agentsview";
 import { collectOpenAIUsage } from "./openai";
+import { collectOpenclawUsage, discoverOpenclawSessionsDirs } from "./openclaw";
 import { mergeDailyUsage, type DailyUsage } from "./merge";
 import { collectClaudeSkills } from "./skills";
 import { collectConfigStack } from "./config-stack";
@@ -270,7 +271,20 @@ async function main(): Promise<void> {
     console.log(`  OpenAI platform: ${openaiDaily.length} days`);
   }
 
-  const mergedDaily = mergeDailyUsage(claudeDaily, codexDaily, openaiDaily);
+  const openclawDirs = await discoverOpenclawSessionsDirs({
+    env: process.env,
+    homeDir: os.homedir(),
+    platform: process.platform,
+  });
+  const openclawDaily = await collectOpenclawUsage({
+    sinceDateStr: sinceStr,
+    sessionsDirs: openclawDirs,
+  });
+  if (openclawDirs.length > 0) {
+    console.log(`  OpenClaw: ${openclawDaily.length} days from ${openclawDirs.length} root(s)`);
+  }
+
+  const mergedDaily = mergeDailyUsage(claudeDaily, codexDaily, openaiDaily, openclawDaily);
 
   if (mergedDaily.length === 0) {
     // Previously we returned here, skipping session_stats / cursor_stats

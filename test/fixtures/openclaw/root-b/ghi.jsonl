@@ -1,0 +1,2 @@
+{"type":"message","timestamp":"2026-05-25T10:00:10.000Z","message":{"role":"assistant","model":"anthropic/claude-sonnet-4-6","usage":{"input":100,"output":10,"cacheRead":0,"cacheWrite":0,"totalTokens":110},"responseId":"resp-abc-1"}}
+{"type":"message","timestamp":"2026-05-26T09:00:00.000Z","message":{"role":"assistant","model":"anthropic/claude-opus-4-7","usage":{"input":200,"output":20,"cacheRead":0,"cacheWrite":0,"totalTokens":220},"responseId":"resp-ghi-1"}}

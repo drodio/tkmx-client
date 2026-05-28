@@ -4,10 +4,13 @@ export type { DailyUsage } from "./usage";
 
 // Merge per-day usage from multiple sources. Within a date, model breakdowns
 // with the same (modelName, source) are summed — not concatenated — so the
-// server never sees two rows colliding on its `(user, date, model, client_id)`
-// primary key within a single POST. This matters when one reporter aggregates
-// ccusage output from multiple machines (EXTRA_CLAUDE_CONFIGS), since a single
-// day can legitimately have the same claude model reported from each machine.
+// server never sees two rows colliding on its `(user, date, model, client_id,
+// source)` primary key within a single POST. This matters when one reporter
+// aggregates usage from multiple machines (EXTRA_CLAUDE_CONFIGS), since a
+// single day can legitimately have the same claude model reported from each
+// machine. The `source` discriminator lets distinct collectors (claude vs
+// openai-api vs openclaw) report the same modelName on the same day without
+// either clobbering the other.
 export function mergeDailyUsage(...sources: DailyUsage[][]): DailyUsage[] {
   const dayMap: Record<string, DailyUsage> = {};
   for (const src of sources) {

@@ -30,6 +30,19 @@ const SRC = fs.readFileSync(
   "utf-8",
 );
 
+test("collectOpenclawUsage is called with sinceStr, not statsSinceStr", () => {
+  assert.match(
+    SRC,
+    /collectOpenclawUsage\(\s*\{[^}]*sinceDateStr:\s*sinceStr/,
+    "openclaw must use REPORT_DAYS window (sinceStr), not the 28d stats window",
+  );
+  assert.doesNotMatch(
+    SRC,
+    /collectOpenclawUsage\(\s*\{[^}]*sinceDateStr:\s*statsSinceStr/,
+    "openclaw must not be windowed to the 28d stats blob window",
+  );
+});
+
 test("collectCursorStats uses statsSinceStr, not sinceStr", () => {
   assert.match(
     SRC,

@@ -303,6 +303,59 @@ test("inactive day (no usage rows) still posts and still refreshes session_stats
   }
 });
 
+test("openclaw rows are present in the POST body when OPENCLAW_SESSIONS_DIRS points at fixtures", async () => {
+  // Reuses the multi-root fixture tree from test/openclaw.test.ts (Task 4).
+  // Expected aggregation (after responseId dedup across roots):
+  //   2026-05-25 sonnet — input 150, output 15, total 165
+  //   2026-05-26 opus   — input 200, output 20, total 220
+  const ctx = await setupE2E({ dailyJson: '{"daily":[]}' });
+  try {
+    const fixturesRoot = path.join(__dirname, "fixtures", "openclaw");
+    const result = await runReporter({
+      ...ctx.baseEnv,
+      // Wide window so the 2026-05-25/26 fixture dates always pass the sinceStr filter.
+      REPORT_DAYS: "3650",
+      OPENCLAW_SESSIONS_DIRS: [
+        path.join(fixturesRoot, "root-a"),
+        path.join(fixturesRoot, "root-b"),
+      ].join(","),
+    });
+    assert.equal(
+      result.status,
+      0,
+      `reporter exited non-zero.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    const captured = ctx.getCaptured();
+    assert.ok(captured, "server did not capture a POST body");
+
+    const openclawRows = (captured as any).data.flatMap((d) =>
+      d.modelBreakdowns
+        .filter((m) => m.source === "openclaw")
+        .map((m) => ({ ...m, date: d.date })),
+    );
+    assert.ok(
+      openclawRows.length >= 2,
+      `expected at least 2 openclaw rows in POST body, got ${openclawRows.length}: ${JSON.stringify(openclawRows)}`,
+    );
+
+    const sonnet = openclawRows.find(
+      (m) => m.date === "2026-05-25" && m.modelName === "anthropic/claude-sonnet-4-6",
+    );
+    assert.ok(sonnet, `missing sonnet row for 2026-05-25 in: ${JSON.stringify(openclawRows)}`);
+    assert.equal(sonnet.inputTokens, 150);
+    assert.equal(sonnet.outputTokens, 15);
+    assert.equal(sonnet.totalTokens, 165);
+
+    const opus = openclawRows.find(
+      (m) => m.date === "2026-05-26" && m.modelName === "anthropic/claude-opus-4-7",
+    );
+    assert.ok(opus, `missing opus row for 2026-05-26 in: ${JSON.stringify(openclawRows)}`);
+    assert.equal(opus.totalTokens, 220);
+  } finally {
+    ctx.cleanup();
+  }
+});
+
 test("legacy reporter/report.js compat shim forwards to the compiled reporter", async () => {
   // Pre-TypeScript installs wrote launchd/systemd units pointing at
   // <repo>/reporter/report.js. The migration replaced that file with a
