@@ -27,10 +27,15 @@ const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
 const STATE_PATH = path.join(PROJECT_ROOT, ".reporting-state.json");
 
 import * as dotenv from "dotenv";
-dotenv.config({ path: path.join(PROJECT_ROOT, ".env") });
+const ENV_PATH = path.join(PROJECT_ROOT, ".env");
+const ENV_FILE = dotenv.config({ path: ENV_PATH }).parsed || {};
 
 import { version as CLIENT_VERSION } from "../package.json";
-const USERNAME = process.env.USERNAME;
+// USERNAME comes only from TKMX_USERNAME or .env — never the ambient OS
+// account name (process.env.USERNAME), which on Windows would silently
+// misattribute usage to the logged-in account. Missing config fails the
+// startup guard below rather than posting to the wrong profile.
+const USERNAME = process.env.TKMX_USERNAME || ENV_FILE.USERNAME;
 const SERVER_URL = process.env.SERVER_URL || "https://tokenmaxxing.odio.dev";
 const TEAM = process.env.TEAM || "default";
 const API_KEY = process.env.API_KEY;
@@ -41,8 +46,6 @@ const ABOUT = process.env.ABOUT || "";
 const HN_USERNAME = process.env.HN_USERNAME || "";
 const DEMO_VIDEO_URL = process.env.DEMO_VIDEO_URL || "";
 const EXTRA_CLAUDE_CONFIGS = process.env.EXTRA_CLAUDE_CONFIGS || "";
-
-const ENV_PATH = path.join(PROJECT_ROOT, ".env");
 
 if (!USERNAME || !API_KEY) {
   console.error("USERNAME and API_KEY must be set in .env");

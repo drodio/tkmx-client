@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { errMessage } from "./errors";
 import type { DailyUsage, ModelBreakdown } from "./usage";
 
@@ -29,14 +30,22 @@ interface RawDailyEntry {
 // so we can't rely on execvp's default search. Resolution order:
 //   1. $AGENTSVIEW_BIN (explicit override for nix, asdf, custom installs)
 //   2. Hard-coded install-location candidates (matches the quickstart)
-//   3. $PATH via `which agentsview` (covers interactive runs)
-// Lazy so tests can swap HOME per-case.
-function agentsviewCandidates(): string[] {
-  return [
-    `${process.env.HOME}/.local/bin/agentsview`,
-    "/opt/homebrew/bin/agentsview",
-    "/usr/local/bin/agentsview",
-  ];
+//   3. $PATH (covers interactive runs)
+// agentsview ships a native binary: `agentsview.exe` on Windows (its installer
+// drops it in %USERPROFILE%\.agentsview\bin and adds that dir to PATH), bare
+// `agentsview` elsewhere. We deliberately don't probe `.cmd`/`.bat` shims — the
+// installer never writes one, and execFileSync can't run a command shim on
+// Windows without a shell, so resolving to one would only hand the caller a
+// path it can't exec. Parameterized over { platform, env, isExecutable } (with
+// target-platform path semantics) so the Windows branch is testable on any host.
+interface ResolveDeps {
+  platform: NodeJS.Platform;
+  env: NodeJS.ProcessEnv;
+  isExecutable: (p: string) => boolean;
+}
+
+function uniqueDefined(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
 }
 
 function isExecutableFile(p: string): boolean {
@@ -47,19 +56,55 @@ function isExecutableFile(p: string): boolean {
   } catch { return false; }
 }
 
-export function resolveAgentsview(): string | null {
-  const override = process.env.AGENTSVIEW_BIN;
-  if (override && isExecutableFile(override)) return override;
-  for (const p of agentsviewCandidates()) {
-    if (isExecutableFile(p)) return p;
+function pathFor(platform: NodeJS.Platform) {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+
+function binaryName(platform: NodeJS.Platform): string {
+  return platform === "win32" ? "agentsview.exe" : "agentsview";
+}
+
+function agentsviewCandidates(deps: ResolveDeps): string[] {
+  const p = pathFor(deps.platform);
+  const name = binaryName(deps.platform);
+  const candidates: string[] = [];
+  for (const home of uniqueDefined([deps.env.HOME, deps.env.USERPROFILE])) {
+    candidates.push(p.join(home, ".local", "bin", name));
+    candidates.push(p.join(home, ".agentsview", "bin", name));
   }
-  try {
-    const viaPath = execFileSync("/usr/bin/env", ["which", "agentsview"], {
-      encoding: "utf-8", timeout: 5000,
-    }).trim();
-    if (viaPath && isExecutableFile(viaPath)) return viaPath;
-  } catch {}
+  candidates.push("/opt/homebrew/bin/agentsview", "/usr/local/bin/agentsview");
+  return uniqueDefined(candidates);
+}
+
+function resolveFromPath(deps: ResolveDeps): string | null {
+  const p = pathFor(deps.platform);
+  const name = binaryName(deps.platform);
+  // process.env is case-insensitive on Windows, so PATH already resolves a
+  // `Path`/`path`-cased var (production passes process.env; tests inject PATH).
+  const pathValue = deps.env.PATH || "";
+  for (const dir of pathValue.split(p.delimiter)) {
+    if (!dir) continue;
+    const candidate = p.join(dir, name);
+    if (deps.isExecutable(candidate)) return candidate;
+  }
   return null;
+}
+
+export function resolveAgentsviewWith(deps: ResolveDeps): string | null {
+  const override = deps.env.AGENTSVIEW_BIN;
+  if (override && deps.isExecutable(override)) return override;
+  for (const candidate of agentsviewCandidates(deps)) {
+    if (deps.isExecutable(candidate)) return candidate;
+  }
+  return resolveFromPath(deps);
+}
+
+export function resolveAgentsview(): string | null {
+  return resolveAgentsviewWith({
+    platform: process.platform,
+    env: process.env,
+    isExecutable: isExecutableFile,
+  });
 }
 
 // Parses `agentsview --version` raw output like
