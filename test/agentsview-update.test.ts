@@ -110,6 +110,40 @@ describe("maybeAutoUpdateAgentsview", () => {
     });
   });
 
+  it("logs the version change when update bumps the binary", () => {
+    withTmp((tmp) => {
+      // --version reports 0.1.0 until `update` drops a marker, then 0.2.0 —
+      // so the before/after detection sees a real bump.
+      const bin = path.join(tmp, "fake-agentsview");
+      const marker = path.join(tmp, "updated");
+      fs.writeFileSync(
+        bin,
+        `#!/usr/bin/env bash\n` +
+          `case "$1" in\n` +
+          `  --version) if [ -f "${marker}" ]; then echo "agentsview v0.2.0"; else echo "agentsview v0.1.0"; fi ;;\n` +
+          `  update) touch "${marker}"; exit 0 ;;\n` +
+          `  *) exit 0 ;;\n` +
+          `esac\n`,
+      );
+      fs.chmodSync(bin, 0o755);
+      const stamp = path.join(tmp, ".agentsview-update-check");
+
+      const logs: string[] = [];
+      const orig = console.log;
+      console.log = (m?: unknown) => { logs.push(String(m)); };
+      try {
+        const ran = maybeAutoUpdateAgentsview(bin, stamp, { nowMs: 1_700_000_000_000 });
+        assert.equal(ran, true);
+      } finally {
+        console.log = orig;
+      }
+      assert.ok(
+        logs.some((l) => /auto-updated: 0\.1\.0 -> 0\.2\.0/.test(l)),
+        `expected a version-change log line, got: ${logs.join(" | ")}`,
+      );
+    });
+  });
+
   it("records the check time before updating so a failing update doesn't retry every run", () => {
     withTmp((tmp) => {
       // agentsview that always fails the update.

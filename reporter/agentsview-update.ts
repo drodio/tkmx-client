@@ -36,6 +36,10 @@ export interface AutoUpdateOptions {
   nowMs: number;
   intervalMs?: number;
   timeoutMs?: number;
+  // Governs ONLY the AGENTSVIEW_AUTO_UPDATE enabled check (kept injectable
+  // for tests). The update subprocess deliberately runs with the real
+  // process.env — it needs the actual PATH/HOME to download and swap the
+  // binary — so this is not propagated to the child.
   env?: NodeJS.ProcessEnv;
 }
 
@@ -74,7 +78,12 @@ export function maybeAutoUpdateAgentsview(
       stdio: ["ignore", "ignore", "pipe"],
     });
   } catch (err) {
-    console.error(`  agentsview auto-update skipped (${errMessage(err)})`);
+    // Surface the child's stderr (captured via the piped fd) the way
+    // queryAgent does — the bare error message is just a generic
+    // "Command failed"/timeout string and hides why the update failed.
+    const stderr = (err as { stderr?: Buffer }).stderr?.toString().trim() || "";
+    const detail = stderr ? `${errMessage(err)}: ${stderr}` : errMessage(err);
+    console.error(`  agentsview auto-update skipped (${detail})`);
     return true;
   }
   const after = detectAgentsviewVersion(bin);
