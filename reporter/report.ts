@@ -18,6 +18,7 @@ import { collectClaudeSkills } from "./skills";
 import { collectConfigStack } from "./config-stack";
 import { collectCursorStats, type CursorStats } from "./cursor";
 import { collectSessionStats } from "./session-stats";
+import { maybeAutoUpdateAgentsview } from "./agentsview-update";
 import { loadState, saveState, computeTransitionMarkers } from "./reporting-state";
 import { STATS_WINDOW_DAYS, formatSinceStr } from "./window";
 import { errMessage } from "./errors";
@@ -26,6 +27,7 @@ import { errMessage } from "./errors";
 // file lives in dist/reporter/report.js — go up two levels to reach the repo.
 const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
 const STATE_PATH = path.join(PROJECT_ROOT, ".reporting-state.json");
+const AGENTSVIEW_UPDATE_STAMP = path.join(PROJECT_ROOT, ".agentsview-update-check");
 
 import * as dotenv from "dotenv";
 const ENV_PATH = path.join(PROJECT_ROOT, ".env");
@@ -285,6 +287,12 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   console.log(`  Using agentsview at ${agentsviewBin}`);
+
+  // Keep agentsview current (throttled to once/day, best-effort, opt-out via
+  // AGENTSVIEW_AUTO_UPDATE=false). Runs before the version is reported and the
+  // data collected so this run already reflects any new binary.
+  maybeAutoUpdateAgentsview(agentsviewBin, AGENTSVIEW_UPDATE_STAMP, { nowMs: Date.now() });
+
   const agentsviewVersion = detectAgentsviewVersion(agentsviewBin);
   if (agentsviewVersion) console.log(`  agentsview version: ${agentsviewVersion}`);
 
