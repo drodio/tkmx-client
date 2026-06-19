@@ -103,13 +103,12 @@ function agentsviewDataDirFor(absConfigDir: string): string {
   return path.join(os.homedir(), ".agentsview-tkmx", hash);
 }
 
-// Collect usage from extra agentsview homes beyond the local scan — synced
-// remote ~/.claude dirs (EXTRA_CLAUDE_CONFIGS) or separate ~/.codex homes
-// (EXTRA_CODEX_CONFIGS, e.g. reviewer bot accounts). Each entry is a home dir
-// containing `subdir` (projects/ for claude, sessions/ for codex); its usage is
+// Collect usage from extra AgentsView-backed homes beyond the local scan:
+// Claude projects, Codex sessions, Pi root data dirs, and OpenCode root data
+// dirs. Each entry is validated against the descriptor's expected directory,
 // synced into an isolated data dir (so it can't contaminate the local
-// sessions.db) and returned for the caller to fold into the matching source.
-// A configured home that can't be collected — missing `subdir`, or any
+// sessions.db), and returned for the caller to fold into the matching source.
+// A configured home that can't be collected — missing expected directory, or any
 // agentsview failure — is fatal: the operator listed it, so the run aborts
 // rather than POST a silently partial total as success (the original cause of
 // weeks of unreported usage).
@@ -297,11 +296,10 @@ async function main(): Promise<void> {
   console.log(`  Pi (local): ${localAgentsviewDaily.pi.length} days`);
   console.log(`  OpenCode (local): ${localAgentsviewDaily.opencode.length} days`);
 
-  // Extra homes outside the local scan, folded into their matching source so
-  // mergeDailyUsage sums same-(date,model,source) rows before POST (see merge.ts
-  // for the canonical dedup/summing contract) rather than letting them collide
-  // on the server upsert. Codex homes (e.g. the reviewer bot's per-account
-  // ~/.codex) report under "codex" alongside the local scan.
+  // Extra homes outside the local scan are folded into their matching
+  // AgentsView-backed source so mergeDailyUsage sums same-(date,model,source)
+  // rows before POST (see merge.ts for the canonical dedup/summing contract)
+  // rather than letting them collide on the server upsert.
   const agentsviewSources = [
     { local: localAgentsviewDaily.claude, raw: EXTRA_CLAUDE_CONFIGS, agent: "claude", subdir: "projects", subdirEnvKey: "CLAUDE_PROJECTS_DIR", label: "Claude" },
     { local: localAgentsviewDaily.codex, raw: EXTRA_CODEX_CONFIGS, agent: "codex", subdir: "sessions", subdirEnvKey: "CODEX_SESSIONS_DIR", label: "Codex" },

@@ -174,9 +174,10 @@ export function parseAgentsviewOutput(parsed: AgentsviewJson, source: string): D
 // Container (~/Library/Group Containers/2BBY89MBSN.dev.warp/.../warp.sqlite).
 // An unattended launchd/systemd daemon has no Full Disk Access, so that
 // open() *blocks* (rather than failing fast) until the timeout, killing the
-// run before it can POST. We only report Claude+Codex, so syncing calls point
-// WARP_DIR at an always-empty dir: the parser finds no warp.sqlite there and
-// skips Warp. --no-sync passes don't run the parser, so they're untouched.
+// run before it can POST. This reporter does not collect Warp usage through
+// AgentsView, so syncing calls point WARP_DIR at an always-empty dir: the
+// parser finds no warp.sqlite there and skips Warp. --no-sync passes don't run
+// the parser, so they're untouched.
 // Living on the query (not the OS-unit env) means existing installs get the
 // fix on a plain `npm install` rebuild, with no daemon-unit regeneration.
 const WARP_SKIP_DIR = "/var/empty";
@@ -228,11 +229,12 @@ export function collectAgentsviewUsage(
 }
 
 // Single-agent collection against an isolated agentsview data dir. Used for
-// EXTRA_{CLAUDE,CODEX}_CONFIGS extra homes — a synced remote ~/.claude or a
-// separate ~/.codex (e.g. a reviewer bot's per-account home) that lives outside
-// the local scan — so per-home incremental sync can't contaminate the local
+// EXTRA_{CLAUDE,CODEX,PI,OPENCODE}_CONFIGS extra homes that live outside the
+// local scan — Claude projects, Codex sessions, Pi root data dirs, and OpenCode
+// root data dirs — so per-home incremental sync can't contaminate the local
 // machine's ~/.agentsview/sessions.db. The caller passes the home's data dir
-// and source dir via env (AGENT_VIEWER_DATA_DIR + CLAUDE_PROJECTS_DIR / CODEX_SESSIONS_DIR).
+// and source dir via env (AGENT_VIEWER_DATA_DIR + CLAUDE_PROJECTS_DIR /
+// CODEX_SESSIONS_DIR / PIEBALD_DIR / OPENCODE_DIR).
 export function collectAgentsviewAgentOnly(bin: string, sinceStr: string, agent: string, env: Record<string, string>, timeoutMs: number = 180000): DailyUsage[] {
   const since = toIsoDate(sinceStr);
   return queryAgent(bin, since, agent, false, timeoutMs, env);
