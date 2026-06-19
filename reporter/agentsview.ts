@@ -165,16 +165,18 @@ export function parseAgentsviewOutput(parsed: AgentsviewJson, source: string): D
   });
 }
 
-// agentsview's syncing pass (no --no-sync) runs its full parser registry,
-// including a Warp parser that reads Warp's sqlite from a macOS App Group
-// Container (~/Library/Group Containers/2BBY89MBSN.dev.warp/.../warp.sqlite).
-// An unattended launchd/systemd daemon has no Full Disk Access, so that
-// open() *blocks* (rather than failing fast) until the timeout, killing the
-// run before it can POST. We only report Claude+Codex, so syncing calls point
+// agentsview's syncing pass runs its full parser registry, including a Warp
+// parser that reads Warp's sqlite from a macOS App Group Container
+// (~/Library/Group Containers/2BBY89MBSN.dev.warp/.../warp.sqlite). An
+// unattended launchd/systemd daemon has no Full Disk Access, so that open()
+// *blocks* (rather than failing fast) until the timeout, killing the run
+// before it can POST. We only report Claude+Codex, so the syncing path points
 // WARP_DIR at an always-empty dir: the parser finds no warp.sqlite there and
-// skips Warp. --no-sync passes don't run the parser, so they're untouched.
-// Living on the query (not the OS-unit env) means existing installs get the
-// fix on a plain `npm install` rebuild, with no daemon-unit regeneration.
+// skips Warp. Read (`--no-sync`) passes don't run the parser, so they're
+// untouched. Living on the call env (not the OS-unit env) means existing
+// installs get the fix on a plain `npm install` rebuild, with no daemon-unit
+// regeneration. The only syncing call is now syncAgentsview() below; the
+// guard in queryAgent stays as defense in case a caller ever syncs there.
 const WARP_SKIP_DIR = "/var/empty";
 
 function queryAgent(
@@ -202,16 +204,66 @@ function queryAgent(
   return parseAgentsviewOutput(JSON.parse(raw), agent);
 }
 
+// Refresh agentsview's local index as a standalone, time-boxed, best-effort
+// step — kept deliberately separate from the read queries below.
+//
+// Why not fold sync into the query (the old behavior)? agentsview's data
+// sync — any write path, including a bare `agentsview sync` — DEADLOCKS when
+// the reporter runs under macOS launchd: the writer hangs forever inside
+// sqlite3_open_v2 (0% CPU, all goroutines parked) while read-only queries
+// (`--no-sync`) are completely unaffected. It is intrinsic to launchd's
+// spawn context, not the environment: it reproduces across agentsview
+// versions and survives ProcessType=Interactive, login-shell wrappers, a
+// fully-replicated launchd env, raised rlimits, and GOMAXPROCS=1. A query
+// that triggers sync therefore hangs until its timeout SIGKILLs it, the
+// transaction rolls back, and the report fails outright — every 2h, forever
+// (the symptom that motivated this change).
+//
+// So we ALWAYS read with --no-sync (deadlock-free) and run sync on its own:
+//   - Interactive runs, Linux/systemd, and Macs that don't hit the deadlock
+//     sync successfully → fully fresh data.
+//   - Macs where launchd sync deadlocks: the timeout reaps the hung sync and
+//     we report the last successfully-synced snapshot instead of nothing.
+// The report can no longer hang or silently fail on the sync. A shorter
+// default timeout bounds the wasted wall-clock when sync does deadlock; an
+// incremental sync is near-instant and a cold full sync is rare. WARP_DIR is
+// pointed at an empty dir here (see WARP_SKIP_DIR) because this is the syncing
+// path that would otherwise block on Warp's Full-Disk-Access-gated sqlite.
+export function syncAgentsview(
+  bin: string,
+  timeoutMs: number = 90000,
+  extraEnv?: Record<string, string>,
+): boolean {
+  const execOpts: Parameters<typeof execFileSync>[2] = {
+    encoding: "utf-8",
+    timeout: timeoutMs,
+    // Force-kill on timeout. The launchd deadlock parks every goroutine, so
+    // the default SIGTERM would reap it too — but SIGKILL can't be caught or
+    // ignored, so a future hang that installs a slow/blocking SIGTERM handler
+    // still gets reaped within the timeout rather than wedging the report.
+    killSignal: "SIGKILL",
+    stdio: ["ignore", "ignore", "pipe"],
+    env: { ...process.env, ...extraEnv, WARP_DIR: WARP_SKIP_DIR },
+  };
+  try {
+    execFileSync(bin, ["sync"], execOpts);
+    return true;
+  } catch (err) {
+    console.error(`  agentsview sync skipped (${errMessage(err)}); reading last-synced data`);
+    return false;
+  }
+}
+
 export function collectAgentsviewUsage(bin: string, sinceStr: string, timeoutMs: number = 180000): { claudeDaily: DailyUsage[]; codexDaily: DailyUsage[] } {
   const since = toIsoDate(sinceStr);
 
-  // One sync call covers every agent: agentsview's syncAllLocked
-  // (internal/sync/engine.go) iterates parser.Registry in a single
-  // pass, so triggering sync via the claude query also picks up
-  // codex, gemini, copilot, etc. The codex follow-up passes
-  // --no-sync to avoid a redundant second pass. If agentsview ever
-  // changes to per-agent sync scoping, drop --no-sync here.
-  const claudeDaily = queryAgent(bin, since, "claude", false, timeoutMs);
+  // One sync pass covers every agent: agentsview's syncAllLocked
+  // (internal/sync/engine.go) iterates parser.Registry in a single pass, so a
+  // standalone `agentsview sync` picks up claude, codex, gemini, copilot, etc.
+  // Both reads below then run with --no-sync (noSync=true) so neither can hit
+  // the launchd sync deadlock.
+  syncAgentsview(bin);
+  const claudeDaily = queryAgent(bin, since, "claude", true, timeoutMs);
   const codexDaily = queryAgent(bin, since, "codex", true, timeoutMs);
 
   return { claudeDaily, codexDaily };
@@ -223,7 +275,12 @@ export function collectAgentsviewUsage(bin: string, sinceStr: string, timeoutMs:
 // the local scan — so per-home incremental sync can't contaminate the local
 // machine's ~/.agentsview/sessions.db. The caller passes the home's data dir
 // and source dir via env (AGENT_VIEWER_DATA_DIR + CLAUDE_PROJECTS_DIR / CODEX_SESSIONS_DIR).
+// The isolated dir starts empty, so the best-effort sync matters more here —
+// but under a launchd deadlock we still degrade to "no rows for this home"
+// rather than failing the whole report (the prior behavior). The read runs
+// --no-sync to stay deadlock-free, same as the local path above.
 export function collectAgentsviewAgentOnly(bin: string, sinceStr: string, agent: string, env: Record<string, string>, timeoutMs: number = 180000): DailyUsage[] {
   const since = toIsoDate(sinceStr);
-  return queryAgent(bin, since, agent, false, timeoutMs, env);
+  syncAgentsview(bin, 90000, env);
+  return queryAgent(bin, since, agent, true, timeoutMs, env);
 }
