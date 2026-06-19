@@ -1,6 +1,6 @@
 # Builder Index Client
 
-Reports your Claude Code and Codex token usage to the [Builder Index](https://www.watchmepivot.com/builder-index). Each user gets a shareable profile page at `www.watchmepivot.com/builder-index/u/YOUR_NAME`.
+Reports your Claude Code, Codex, Pi harness, and OpenCode token usage to the [Builder Index](https://www.watchmepivot.com/builder-index). Each user gets a shareable profile page at `www.watchmepivot.com/builder-index/u/YOUR_NAME`.
 
 ## Quick Start
 
@@ -105,9 +105,11 @@ npm run report
 
 ```
 [2026-04-08T12:30:40.544Z] Collecting 28d usage since 20260311 for your-name (team: your-team)
-  Claude: 23 days
-  Codex: 5 days
-[2026-04-08T12:30:44.237Z] Server responded 200: {"ok":true,"rows":56}
+  Claude (local): 23 days
+  Codex (local): 5 days
+  Pi (local): 3 days
+  OpenCode (local): 8 days
+[2026-04-08T12:30:44.237Z] Server responded 200: {"ok":true,"rows":72}
 ```
 
 A `CLIENT_ID` is auto-generated on first run and saved to `.env`. This identifies your machine so multiple machines can report for the same username without overwriting each other.
