@@ -48,6 +48,8 @@ const HN_USERNAME = process.env.HN_USERNAME || "";
 const DEMO_VIDEO_URL = process.env.DEMO_VIDEO_URL || "";
 const EXTRA_CLAUDE_CONFIGS = process.env.EXTRA_CLAUDE_CONFIGS || "";
 const EXTRA_CODEX_CONFIGS = process.env.EXTRA_CODEX_CONFIGS || "";
+const EXTRA_PI_CONFIGS = process.env.EXTRA_PI_CONFIGS || "";
+const EXTRA_OPENCODE_CONFIGS = process.env.EXTRA_OPENCODE_CONFIGS || "";
 
 if (!USERNAME || !API_KEY) {
   console.error("USERNAME and API_KEY must be set in .env");
@@ -121,9 +123,10 @@ function collectExtraAgentsviewHomes(
   for (const entry of parseExtraConfigs(raw)) {
     const absEntry = path.resolve(entry);
     const name = path.basename(absEntry) || absEntry;
-    const subdirPath = path.join(absEntry, opts.subdir);
+    const subdirPath = opts.subdir === "." ? absEntry : path.join(absEntry, opts.subdir);
+    const expectedPathLabel = opts.subdir === "." ? "directory" : `${opts.subdir}/ subdir`;
     if (!fs.existsSync(subdirPath)) {
-      throw new Error(`${opts.label} (${name}) missing ${opts.subdir}/ subdir at ${absEntry} — a configured EXTRA_${opts.label.toUpperCase()}_CONFIGS home must be a valid ${opts.agent} home`);
+      throw new Error(`${opts.label} (${name}) missing ${expectedPathLabel} at ${absEntry} — a configured EXTRA_${opts.label.toUpperCase()}_CONFIGS home must be a valid ${opts.agent} home`);
     }
     const dataDir = agentsviewDataDirFor(absEntry);
     fs.mkdirSync(dataDir, { recursive: true });
@@ -289,20 +292,25 @@ async function main(): Promise<void> {
   if (agentsviewVersion) console.log(`  agentsview version: ${agentsviewVersion}`);
 
   const localAgentsviewDaily = collectAgentsviewUsage(agentsviewBin, sinceStr);
-  const localClaudeDaily = localAgentsviewDaily.claude;
-  const localCodexDaily = localAgentsviewDaily.codex;
-  console.log(`  Claude (local): ${localClaudeDaily.length} days`);
-  console.log(`  Codex (local): ${localCodexDaily.length} days`);
+  console.log(`  Claude (local): ${localAgentsviewDaily.claude.length} days`);
+  console.log(`  Codex (local): ${localAgentsviewDaily.codex.length} days`);
+  console.log(`  Pi (local): ${localAgentsviewDaily.pi.length} days`);
+  console.log(`  OpenCode (local): ${localAgentsviewDaily.opencode.length} days`);
 
   // Extra homes outside the local scan, folded into their matching source so
   // mergeDailyUsage sums same-(date,model,source) rows before POST (see merge.ts
   // for the canonical dedup/summing contract) rather than letting them collide
   // on the server upsert. Codex homes (e.g. the reviewer bot's per-account
   // ~/.codex) report under "codex" alongside the local scan.
-  const [claudeDaily, allCodexDaily] = [
-    { local: localClaudeDaily, raw: EXTRA_CLAUDE_CONFIGS, agent: "claude", subdir: "projects", subdirEnvKey: "CLAUDE_PROJECTS_DIR", label: "Claude" },
-    { local: localCodexDaily,  raw: EXTRA_CODEX_CONFIGS,  agent: "codex",  subdir: "sessions",  subdirEnvKey: "CODEX_SESSIONS_DIR", label: "Codex" },
-  ].map((s) => s.local.concat(collectExtraAgentsviewHomes(agentsviewBin, sinceStr, s.raw, s)));
+  const agentsviewSources = [
+    { local: localAgentsviewDaily.claude, raw: EXTRA_CLAUDE_CONFIGS, agent: "claude", subdir: "projects", subdirEnvKey: "CLAUDE_PROJECTS_DIR", label: "Claude" },
+    { local: localAgentsviewDaily.codex, raw: EXTRA_CODEX_CONFIGS, agent: "codex", subdir: "sessions", subdirEnvKey: "CODEX_SESSIONS_DIR", label: "Codex" },
+    { local: localAgentsviewDaily.pi, raw: EXTRA_PI_CONFIGS, agent: "pi", subdir: ".", subdirEnvKey: "PIEBALD_DIR", label: "Pi" },
+    { local: localAgentsviewDaily.opencode, raw: EXTRA_OPENCODE_CONFIGS, agent: "opencode", subdir: ".", subdirEnvKey: "OPENCODE_DIR", label: "OpenCode" },
+  ];
+  const agentsviewDaily = agentsviewSources.map((s) => (
+    s.local.concat(collectExtraAgentsviewHomes(agentsviewBin, sinceStr, s.raw, s))
+  ));
 
   const openaiDaily = await collectOpenAIUsage(sinceStr);
   if (openaiDaily.length > 0) {
@@ -322,7 +330,7 @@ async function main(): Promise<void> {
     console.log(`  OpenClaw: ${openclawDaily.length} days from ${openclawDirs.length} root(s)`);
   }
 
-  const mergedDaily = mergeDailyUsage(claudeDaily, allCodexDaily, openaiDaily, openclawDaily);
+  const mergedDaily = mergeDailyUsage(...agentsviewDaily, openaiDaily, openclawDaily);
 
   if (mergedDaily.length === 0) {
     // Previously we returned here, skipping session_stats / cursor_stats

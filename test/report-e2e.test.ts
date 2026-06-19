@@ -54,7 +54,7 @@ function runReporter(env: Record<string, string>, timeoutMs = 30000, script: str
 // `usage` subcommand echoes — either a row for the "activity" scenario or
 // `{"daily":[]}` for the inactive scenario. The script also logs its argv
 // to argvLog so tests can inspect the --since windows.
-function writeFakeAgentsview(fakeBin, argvLog, dailyJson, failCodexSessionsDir = "") {
+function writeFakeAgentsview(fakeBin, argvLog, dailyJson, failUsageEnvKey = "", failUsageEnvValue = "") {
   if (process.platform === "win32") {
     fs.writeFileSync(
       fakeBin,
@@ -64,11 +64,11 @@ const args = process.argv.slice(1);
 const cmd = path.basename(args[0] || "");
 if (cmd !== "usage" && cmd !== "stats") return;
 args[0] = cmd;
-const envCols = ["CODEX_SESSIONS_DIR", "CLAUDE_PROJECTS_DIR", "AGENT_VIEWER_DATA_DIR"].map((k) => k + "=" + (process.env[k] || ""));
+const envCols = ["CODEX_SESSIONS_DIR", "CLAUDE_PROJECTS_DIR", "PIEBALD_DIR", "OPENCODE_DIR", "AGENT_VIEWER_DATA_DIR"].map((k) => k + "=" + (process.env[k] || ""));
 fs.appendFileSync(${JSON.stringify(argvLog)}, args.concat(envCols).join("\\t") + "\\n");
 if (cmd === "usage") {
-  if (${JSON.stringify(failCodexSessionsDir)} && process.env.CODEX_SESSIONS_DIR === ${JSON.stringify(failCodexSessionsDir)}) {
-    process.stderr.write("agentsview: simulated usage failure for " + process.env.CODEX_SESSIONS_DIR + "\\n");
+  if (${JSON.stringify(failUsageEnvKey)} && process.env[${JSON.stringify(failUsageEnvKey)}] === ${JSON.stringify(failUsageEnvValue)}) {
+    process.stderr.write("agentsview: simulated usage failure for " + ${JSON.stringify(failUsageEnvKey)} + "=" + process.env[${JSON.stringify(failUsageEnvKey)}] + "\\n");
     process.exit(2);
   }
   console.log(${JSON.stringify(dailyJson)});
@@ -85,22 +85,30 @@ process.exit(0);
     return;
   }
 
+  const shQuote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
+  const failUsageConfig = `FAIL_USAGE_ENV_KEY=${shQuote(failUsageEnvKey)}
+FAIL_USAGE_ENV_VALUE=${shQuote(failUsageEnvValue)}`;
+
   fs.writeFileSync(
     fakeBin,
     `#!/usr/bin/env bash
+${failUsageConfig}
 printf '%s\\t' "$@" >> "${argvLog}"
-printf 'CODEX_SESSIONS_DIR=%s\\tCLAUDE_PROJECTS_DIR=%s\\tAGENT_VIEWER_DATA_DIR=%s\\t' "$CODEX_SESSIONS_DIR" "$CLAUDE_PROJECTS_DIR" "$AGENT_VIEWER_DATA_DIR" >> "${argvLog}"
+printf 'CODEX_SESSIONS_DIR=%s\\tCLAUDE_PROJECTS_DIR=%s\\tPIEBALD_DIR=%s\\tOPENCODE_DIR=%s\\tAGENT_VIEWER_DATA_DIR=%s\\t' "$CODEX_SESSIONS_DIR" "$CLAUDE_PROJECTS_DIR" "$PIEBALD_DIR" "$OPENCODE_DIR" "$AGENT_VIEWER_DATA_DIR" >> "${argvLog}"
 printf '\\n' >> "${argvLog}"
 case "$1" in
   --version)
     echo "agentsview v0.25.0 (commit abcdef1, built 2026-04-24T00:00:00Z)"
     ;;
   usage)
-    if [ -n '${failCodexSessionsDir}' ] && [ "$CODEX_SESSIONS_DIR" = '${failCodexSessionsDir}' ]; then
-      echo "agentsview: simulated usage failure for $CODEX_SESSIONS_DIR" >&2
-      exit 2
+    if [ -n "$FAIL_USAGE_ENV_KEY" ]; then
+      current_value="\${!FAIL_USAGE_ENV_KEY}"
+      if [ "$current_value" = "$FAIL_USAGE_ENV_VALUE" ]; then
+        echo "agentsview: simulated usage failure for $FAIL_USAGE_ENV_KEY=$FAIL_USAGE_ENV_VALUE" >&2
+        exit 2
+      fi
     fi
-    echo '${dailyJson.replace(/'/g, "'\\''")}'
+    echo ${shQuote(dailyJson)}
     ;;
   stats)
     SINCE=""
@@ -124,11 +132,11 @@ esac
 
 // Shared test scaffolding: tmp dir, fake-agentsview, stub server. Returns
 // everything the test needs plus a cleanup fn.
-async function setupE2E({ dailyJson, failCodexSessionsDir = "" }) {
+async function setupE2E({ dailyJson, failUsageEnvKey = "", failUsageEnvValue = "" }) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-e2e-"));
   const argvLog = path.join(tmp, "argv.log");
   const fakeScript = path.join(tmp, process.platform === "win32" ? "fake-agentsview-preload.cjs" : "fake-agentsview");
-  writeFakeAgentsview(fakeScript, argvLog, dailyJson, failCodexSessionsDir);
+  writeFakeAgentsview(fakeScript, argvLog, dailyJson, failUsageEnvKey, failUsageEnvValue);
   const fakeBin = process.platform === "win32" ? process.execPath : fakeScript;
 
   let captured = null;
@@ -168,6 +176,8 @@ async function setupE2E({ dailyJson, failCodexSessionsDir = "" }) {
     REPORT_MACHINE_CONFIG: "false",
     EXTRA_CLAUDE_CONFIGS: "",
     EXTRA_CODEX_CONFIGS: "",
+    EXTRA_PI_CONFIGS: "",
+    EXTRA_OPENCODE_CONFIGS: "",
     OPENAI_ADMIN_KEY: "",
     TEAM: "e2e",
   };
@@ -367,16 +377,18 @@ test("openclaw rows are present in the POST body when OPENCLAW_SESSIONS_DIRS poi
   }
 });
 
-// EXTRA_{CLAUDE,CODEX}_CONFIGS are comma-separated home lists routed through
+// EXTRA_{CLAUDE,CODEX,PI,OPENCODE}_CONFIGS are comma-separated home lists routed through
 // the same descriptor map in report.ts. For EACH agent's descriptor, every
 // configured home's usage must sum into THAT agent's source (colliding
 // (date,model,source) rows sum, not drop — see mergeDailyUsage), without
-// bleeding into the other source. Two homes per case guard a first-entry-only
-// undercount (the real multi-account use case); one matrix over both agents
-// guards both descriptors' subdir + env-var wiring against drift.
+// bleeding into the other sources. Two homes per case guard a first-entry-only
+// undercount (the real multi-account use case); one matrix over all agents
+// guards every descriptor's subdir + env-var wiring against drift.
 for (const tc of [
-  { agent: "codex",  envVar: "EXTRA_CODEX_CONFIGS",  subdir: "sessions", subdirEnvKey: "CODEX_SESSIONS_DIR",  source: "codex",  other: "claude" },
-  { agent: "claude", envVar: "EXTRA_CLAUDE_CONFIGS", subdir: "projects", subdirEnvKey: "CLAUDE_PROJECTS_DIR", source: "claude", other: "codex"  },
+  { agent: "codex", envVar: "EXTRA_CODEX_CONFIGS", subdir: "sessions", subdirEnvKey: "CODEX_SESSIONS_DIR", source: "codex" },
+  { agent: "claude", envVar: "EXTRA_CLAUDE_CONFIGS", subdir: "projects", subdirEnvKey: "CLAUDE_PROJECTS_DIR", source: "claude" },
+  { agent: "pi", envVar: "EXTRA_PI_CONFIGS", subdir: ".", subdirEnvKey: "PIEBALD_DIR", source: "pi" },
+  { agent: "opencode", envVar: "EXTRA_OPENCODE_CONFIGS", subdir: ".", subdirEnvKey: "OPENCODE_DIR", source: "opencode" },
 ]) {
   test(`${tc.envVar} sums every configured home's usage into the ${tc.source} source, scanning each right home`, async () => {
     const ctx = await setupE2E({
@@ -386,8 +398,9 @@ for (const tc of [
     const extraRoot = fs.mkdtempSync(path.join(os.tmpdir(), `tkmx-${tc.agent}-`));
     const homeA = path.join(extraRoot, "home-a");
     const homeB = path.join(extraRoot, "home-b");
-    fs.mkdirSync(path.join(homeA, tc.subdir), { recursive: true });
-    fs.mkdirSync(path.join(homeB, tc.subdir), { recursive: true });
+    const sourcePath = (home: string) => tc.subdir === "." ? home : path.join(home, tc.subdir);
+    fs.mkdirSync(sourcePath(homeA), { recursive: true });
+    fs.mkdirSync(sourcePath(homeB), { recursive: true });
     try {
       const result = await runReporter({
         ...ctx.baseEnv,
@@ -413,10 +426,12 @@ for (const tc of [
       assert.equal(row.outputTokens, 300);
       assert.equal(row.totalTokens, 3300);
 
-      // The extra homes must not bleed into the other source (only its local scan).
-      const otherRow = day.modelBreakdowns.find((m) => m.source === tc.other && m.modelName === "gpt-5.5");
-      assert.ok(otherRow, `expected a ${tc.other}-source row from the local scan`);
-      assert.equal(otherRow.inputTokens, 1000, `extra ${tc.agent} homes must not be counted under ${tc.other}`);
+      // The extra homes must not bleed into the other sources (only their local scans).
+      for (const source of ["claude", "codex", "pi", "opencode"].filter((source) => source !== tc.source)) {
+        const localOnlyRow = day.modelBreakdowns.find((m) => m.source === source && m.modelName === "gpt-5.5");
+        assert.ok(localOnlyRow, `expected a ${source}-source row from the local scan`);
+        assert.equal(localOnlyRow.inputTokens, 1000, `extra ${tc.agent} homes must not be counted under ${source}`);
+      }
 
       // The merge total alone can't prove the reporter scanned the *right* homes
       // (a wrong-path scan that still returned 1000 would also sum). Assert
@@ -425,8 +440,8 @@ for (const tc of [
       const usageCalls = argvLines.filter((l) => l.startsWith("usage\t") && l.includes(`--agent\t${tc.agent}`));
       for (const home of [homeA, homeB]) {
         assert.ok(
-          usageCalls.some((l) => l.includes(`${tc.subdirEnvKey}=${path.join(home, tc.subdir)}`)),
-          `expected a ${tc.agent} usage call with ${tc.subdirEnvKey}=${path.join(home, tc.subdir)}, got:\n${usageCalls.join("\n")}`,
+          usageCalls.some((l) => l.includes(`${tc.subdirEnvKey}=${sourcePath(home)}`)),
+          `expected a ${tc.agent} usage call with ${tc.subdirEnvKey}=${sourcePath(home)}, got:\n${usageCalls.join("\n")}`,
         );
       }
     } finally {
@@ -443,33 +458,63 @@ for (const tc of [
 // collectExtraAgentsviewHomes (missing-subdir throw vs the catch→rethrow when
 // a valid home's agentsview call fails); same guarantee, so one matrix.
 for (const tc of [
-  { name: "missing sessions/ subdir", makeSessions: false, failUsage: false, expectStderr: /missing sessions\/ subdir/i },
-  { name: "agentsview usage call fails for a valid home", makeSessions: true, failUsage: true, expectStderr: /usage collection failed/i },
+  {
+    agent: "codex",
+    envVar: "EXTRA_CODEX_CONFIGS",
+    subdir: "sessions",
+    subdirEnvKey: "CODEX_SESSIONS_DIR",
+    missingName: "missing sessions/ subdir",
+    missingPattern: /missing sessions\/ subdir/i,
+  },
+  {
+    agent: "pi",
+    envVar: "EXTRA_PI_CONFIGS",
+    subdir: ".",
+    subdirEnvKey: "PIEBALD_DIR",
+    missingName: "missing configured directory",
+    missingPattern: /missing directory/i,
+  },
+  {
+    agent: "opencode",
+    envVar: "EXTRA_OPENCODE_CONFIGS",
+    subdir: ".",
+    subdirEnvKey: "OPENCODE_DIR",
+    missingName: "missing configured directory",
+    missingPattern: /missing directory/i,
+  },
 ]) {
-  test(`a configured EXTRA_CODEX_CONFIGS home aborts the run with no POST when it can't be collected — ${tc.name}`, async () => {
-    const extraRoot = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-codex-bad-"));
-    const home = path.join(extraRoot, "codex-account-broken");
-    fs.mkdirSync(tc.makeSessions ? path.join(home, "sessions") : home, { recursive: true });
-    const ctx = await setupE2E({
-      dailyJson:
-        '{"daily":[{"date":"2026-05-25","modelBreakdowns":[{"modelName":"gpt-5.5","inputTokens":1000,"outputTokens":100,"cacheCreationTokens":0,"cacheReadTokens":0}]}]}',
-      failCodexSessionsDir: tc.failUsage ? path.join(home, "sessions") : "",
-    });
-    try {
-      const result = await runReporter({
-        ...ctx.baseEnv,
-        REPORT_DAYS: "3650",
-        EXTRA_CODEX_CONFIGS: home,
+  for (const mode of [
+    { name: tc.missingName, makeSource: false, failUsage: false, expectStderr: tc.missingPattern },
+    { name: "agentsview usage call fails for a valid home", makeSource: true, failUsage: true, expectStderr: /usage collection failed/i },
+  ]) {
+    test(`a configured ${tc.envVar} home aborts the run with no POST when it can't be collected - ${mode.name}`, async () => {
+      const extraRoot = fs.mkdtempSync(path.join(os.tmpdir(), `tkmx-${tc.agent}-bad-`));
+      const home = path.join(extraRoot, `${tc.agent}-account-broken`);
+      const sourcePath = tc.subdir === "." ? home : path.join(home, tc.subdir);
+      if (mode.makeSource) fs.mkdirSync(sourcePath, { recursive: true });
+      else if (tc.subdir !== ".") fs.mkdirSync(home, { recursive: true });
+      const ctx = await setupE2E({
+        dailyJson:
+          '{"daily":[{"date":"2026-05-25","modelBreakdowns":[{"modelName":"gpt-5.5","inputTokens":1000,"outputTokens":100,"cacheCreationTokens":0,"cacheReadTokens":0}]}]}',
+        failUsageEnvKey: mode.failUsage ? tc.subdirEnvKey : "",
+        failUsageEnvValue: mode.failUsage ? sourcePath : "",
       });
-      assert.notEqual(result.status, 0, "reporter must exit non-zero when a configured home can't be collected");
-      assert.equal(ctx.getCaptured(), null, "no POST may be sent when a configured extra home can't be collected");
-      assert.match(result.stderr, /codex-account-broken/i, `expected a fatal error naming the home, got stderr:\n${result.stderr}`);
-      assert.match(result.stderr, tc.expectStderr, `expected the ${tc.name} branch's error message, got stderr:\n${result.stderr}`);
-    } finally {
-      fs.rmSync(extraRoot, { recursive: true, force: true });
-      ctx.cleanup();
-    }
-  });
+      try {
+        const result = await runReporter({
+          ...ctx.baseEnv,
+          REPORT_DAYS: "3650",
+          [tc.envVar]: home,
+        });
+        assert.notEqual(result.status, 0, "reporter must exit non-zero when a configured home can't be collected");
+        assert.equal(ctx.getCaptured(), null, "no POST may be sent when a configured extra home can't be collected");
+        assert.match(result.stderr, new RegExp(`${tc.agent}-account-broken`, "i"), `expected fatal error naming the home, got stderr:\n${result.stderr}`);
+        assert.match(result.stderr, mode.expectStderr, `expected the ${mode.name} branch's error message, got stderr:\n${result.stderr}`);
+      } finally {
+        fs.rmSync(extraRoot, { recursive: true, force: true });
+        ctx.cleanup();
+      }
+    });
+  }
 }
 
 test("legacy reporter/report.js compat shim forwards to the compiled reporter", async () => {
