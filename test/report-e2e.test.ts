@@ -50,6 +50,14 @@ function runReporter(env: Record<string, string>, timeoutMs = 30000, script: str
   });
 }
 
+function quoteNodeOptionsValue(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function appendNodeOption(existing: string | undefined, option: string): string {
+  return [existing, option].filter(Boolean).join(" ");
+}
+
 // Builds a temp fake-agentsview bash script. `dailyJson` is the value the
 // `usage` subcommand echoes — either a row for the "activity" scenario or
 // `{"daily":[]}` for the inactive scenario. The script also logs its argv
@@ -165,7 +173,7 @@ async function setupE2E({ dailyJson, failUsageEnvKey = "", failUsageEnvValue = "
     SERVER_URL: `http://127.0.0.1:${port}`,
     AGENTSVIEW_BIN: fakeBin,
     NODE_OPTIONS: process.platform === "win32"
-      ? `${process.env.NODE_OPTIONS || ""} --require=${fakeScript}`.trim()
+      ? appendNodeOption(process.env.NODE_OPTIONS, `--require=${quoteNodeOptionsValue(fakeScript)}`)
       : process.env.NODE_OPTIONS,
     REPORT_DAYS: "1",
     REPORT_DEV_STATS: "true",
