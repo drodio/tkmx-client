@@ -288,7 +288,9 @@ async function main(): Promise<void> {
   const agentsviewVersion = detectAgentsviewVersion(agentsviewBin);
   if (agentsviewVersion) console.log(`  agentsview version: ${agentsviewVersion}`);
 
-  const { claudeDaily: localClaudeDaily, codexDaily: localCodexDaily } = collectAgentsviewUsage(agentsviewBin, sinceStr);
+  const localAgentsviewDaily = collectAgentsviewUsage(agentsviewBin, sinceStr);
+  const localClaudeDaily = localAgentsviewDaily.claude;
+  const localCodexDaily = localAgentsviewDaily.codex;
   console.log(`  Claude (local): ${localClaudeDaily.length} days`);
   console.log(`  Codex (local): ${localCodexDaily.length} days`);
 

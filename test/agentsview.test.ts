@@ -103,12 +103,54 @@ describe("parseAgentsviewOutput", () => {
   });
 });
 
+describe("collectAgentsviewUsage local agents", () => {
+  it("collects claude, codex, pi, and opencode with one sync pass", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-agents-"));
+    try {
+      const logPath = path.join(tmp, "calls.log");
+      const fakeBin = path.join(tmp, "agentsview");
+      writeExec(
+        fakeBin,
+        `#!/bin/sh
+agent=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--agent" ]; then agent="$arg"; fi
+  prev="$arg"
+done
+echo "$*" >> "${logPath}"
+printf '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"%s-model","inputTokens":10,"outputTokens":2}]}]}\\n' "$agent"
+`,
+      );
+
+      const usageByAgent = collectAgentsviewUsage(fakeBin, "20260501") as any;
+
+      assert.deepEqual(Object.keys(usageByAgent).sort(), ["claude", "codex", "opencode", "pi"]);
+      assert.equal(usageByAgent.claude[0].modelBreakdowns[0].source, "claude");
+      assert.equal(usageByAgent.codex[0].modelBreakdowns[0].source, "codex");
+      assert.equal(usageByAgent.pi[0].modelBreakdowns[0].source, "pi");
+      assert.equal(usageByAgent.opencode[0].modelBreakdowns[0].source, "opencode");
+
+      const lines = fs.readFileSync(logPath, "utf-8").trim().split("\n");
+      const agents = lines.map((line) => line.match(/--agent ([^ ]+)/)?.[1]);
+      assert.equal(agents[0], "claude");
+      assert.deepEqual(agents.slice(1).sort(), ["codex", "opencode", "pi"]);
+      assert.ok(!lines[0].includes("--no-sync"), "first claude call should trigger the one sync pass");
+      for (const line of lines.slice(1)) {
+        assert.ok(line.includes("--no-sync"), `follow-up call should skip sync: ${line}`);
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("collectAgentsviewUsage WARP_DIR scoping", () => {
   // A fake agentsview that records the WARP_DIR it received plus its args,
   // then emits empty daily JSON so the caller parses cleanly. Proves the
   // Warp-skip is scoped to the syncing call (the only one that runs the
   // parser registry that hangs an unattended daemon), not the --no-sync one.
-  it("sets WARP_DIR=/var/empty on the syncing claude call but not the --no-sync codex call", () => {
+  it("sets WARP_DIR=/var/empty on the syncing claude call but not follow-up agent calls", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-warp-"));
     try {
       const logPath = path.join(tmp, "calls.log");
@@ -122,10 +164,14 @@ describe("collectAgentsviewUsage WARP_DIR scoping", () => {
 
       const lines = fs.readFileSync(logPath, "utf-8").trim().split("\n");
       const claudeLine = lines.find((l) => l.includes("--agent claude"));
-      const codexLine = lines.find((l) => l.includes("--agent codex"));
       assert.match(claudeLine, /WARP_DIR=\/var\/empty\|/);
-      assert.ok(codexLine.includes("--no-sync"), "codex call should pass --no-sync");
-      assert.doesNotMatch(codexLine, /WARP_DIR=\/var\/empty\|/);
+
+      for (const agent of ["codex", "pi", "opencode"]) {
+        const line = lines.find((l) => l.includes(`--agent ${agent}`));
+        assert.ok(line, `missing ${agent} call`);
+        assert.ok(line.includes("--no-sync"), `${agent} call should pass --no-sync`);
+        assert.doesNotMatch(line, /WARP_DIR=\/var\/empty\|/);
+      }
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

@@ -138,6 +138,10 @@ interface AgentsviewJson {
   daily?: RawDailyEntry[];
 }
 
+export const LOCAL_AGENTSVIEW_AGENTS = ["claude", "codex", "pi", "opencode"] as const;
+export type AgentsviewAgent = (typeof LOCAL_AGENTSVIEW_AGENTS)[number];
+export type AgentsviewUsageByAgent = Record<AgentsviewAgent, DailyUsage[]>;
+
 // Convert `agentsview usage daily --json` output into the normalized
 // internal shape. Defaults missing per-token-type counters to 0 and
 // computes totalTokens once, so downstream code (merge.ts / report.ts)
@@ -202,19 +206,25 @@ function queryAgent(
   return parseAgentsviewOutput(JSON.parse(raw), agent);
 }
 
-export function collectAgentsviewUsage(bin: string, sinceStr: string, timeoutMs: number = 180000): { claudeDaily: DailyUsage[]; codexDaily: DailyUsage[] } {
+// One sync call covers every agent: agentsview's syncAllLocked
+// (internal/sync/engine.go) iterates parser.Registry in a single
+// pass, so triggering sync via the first query also picks up
+// codex, pi, opencode, gemini, copilot, etc. Follow-up queries pass
+// --no-sync to avoid redundant sync passes. If agentsview ever
+// changes to per-agent sync scoping, remove that optimization here.
+export function collectAgentsviewUsage(
+  bin: string,
+  sinceStr: string,
+  timeoutMs: number = 180000,
+): AgentsviewUsageByAgent {
   const since = toIsoDate(sinceStr);
+  const usageByAgent = {} as AgentsviewUsageByAgent;
 
-  // One sync call covers every agent: agentsview's syncAllLocked
-  // (internal/sync/engine.go) iterates parser.Registry in a single
-  // pass, so triggering sync via the claude query also picks up
-  // codex, gemini, copilot, etc. The codex follow-up passes
-  // --no-sync to avoid a redundant second pass. If agentsview ever
-  // changes to per-agent sync scoping, drop --no-sync here.
-  const claudeDaily = queryAgent(bin, since, "claude", false, timeoutMs);
-  const codexDaily = queryAgent(bin, since, "codex", true, timeoutMs);
+  LOCAL_AGENTSVIEW_AGENTS.forEach((agent, index) => {
+    usageByAgent[agent] = queryAgent(bin, since, agent, index > 0, timeoutMs);
+  });
 
-  return { claudeDaily, codexDaily };
+  return usageByAgent;
 }
 
 // Single-agent collection against an isolated agentsview data dir. Used for
