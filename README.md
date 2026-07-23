@@ -63,14 +63,14 @@ npm install        # installs deps + builds dist/ (runs `npm run build` via prep
 Pick a unique username and provide your email. First come, first served.
 
 ```
-curl -s -X POST https://tokenmaxxing.odio.dev/api/register \
+curl -s -X POST https://www.watchmepivot.com/api/register \
   -H 'Content-Type: application/json' \
   -d '{"username":"YOUR_NAME", "email":"you@example.com"}'
 ```
 
-Save the returned API key — it cannot be retrieved later.
+Save the returned API key — it cannot be retrieved later. The response `profile` is your Builder Index page (`https://www.watchmepivot.com/builder-index/u/YOUR_NAME`).
 
-> **Backend host:** the public board is the **Builder Index** at `www.watchmepivot.com/builder-index`, but the client still registers and reports to the API at `tokenmaxxing.odio.dev` (the Builder Index reads from it). Leave `SERVER_URL` unset / the register URL as shown — pointing it at `watchmepivot.com` will break registration.
+> **Hosts:** the public board is the **Builder Index** at `www.watchmepivot.com/builder-index`. Registration works through `www.watchmepivot.com/api/register` (shown above — proxied to the API) or the API directly at `tokenmaxxing.odio.dev/api/register`; either is fine. Reporting uses `SERVER_URL`, which defaults to `tokenmaxxing.odio.dev` — leave it unset and reports work out of the box.
 
 > Email is required at registration but kept private. It is never displayed or returned by any API.
 
