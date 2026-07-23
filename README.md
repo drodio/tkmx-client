@@ -70,7 +70,7 @@ curl -s -X POST https://www.watchmepivot.com/api/register \
 
 Save the returned API key — it cannot be retrieved later. The response `profile` is your Builder Index page (`https://www.watchmepivot.com/builder-index/u/YOUR_NAME`).
 
-> **Hosts:** the public board is the **Builder Index** at `www.watchmepivot.com/builder-index`. Registration works through `www.watchmepivot.com/api/register` (shown above — proxied to the API) or the API directly at `tokenmaxxing.odio.dev/api/register`; either is fine. Reporting uses `SERVER_URL`, which defaults to `tokenmaxxing.odio.dev` — leave it unset and reports work out of the box.
+> **Hosts:** the public board is the **Builder Index** at `www.watchmepivot.com/builder-index`, and your profile is `www.watchmepivot.com/builder-index/u/YOUR_NAME`. Leave `SERVER_URL` unset — registration and reporting work out of the box.
 
 > Email is required at registration but kept private. It is never displayed or returned by any API.
 
