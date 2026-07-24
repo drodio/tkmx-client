@@ -95,6 +95,11 @@ case "$1" in
   --version)
     echo "agentsview v0.25.0 (commit abcdef1, built 2026-04-24T00:00:00Z)"
     ;;
+  sync)
+    # Standalone best-effort index refresh; the reporter runs this before
+    # reading with --no-sync. A real agentsview exits 0 here.
+    exit 0
+    ;;
   usage)
     if [ -n '${failCodexSessionsDir}' ] && [ "$CODEX_SESSIONS_DIR" = '${failCodexSessionsDir}' ]; then
       echo "agentsview: simulated usage failure for $CODEX_SESSIONS_DIR" >&2

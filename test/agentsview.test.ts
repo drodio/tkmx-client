@@ -4,7 +4,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs";
 
-import { parseAgentsviewOutput, toIsoDate, collectAgentsviewUsage, resolveAgentsviewWith } from "../reporter/agentsview";
+import { parseAgentsviewOutput, toIsoDate, collectAgentsviewUsage, syncAgentsview, resolveAgentsviewWith } from "../reporter/agentsview";
 
 // Write an executable fixture (default: a no-op shell stub) and mark it +x.
 function writeExec(p, body = "#!/bin/sh\n") {
@@ -103,28 +103,75 @@ describe("parseAgentsviewOutput", () => {
   });
 });
 
+describe("syncAgentsview", () => {
+  function writeExec(dir, body) {
+    const p = path.join(dir, "fake-agentsview");
+    fs.writeFileSync(p, body);
+    fs.chmodSync(p, 0o755);
+    return p;
+  }
+
+  it("returns true when `agentsview sync` exits 0", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-sync-"));
+    try {
+      const bin = writeExec(tmp, "#!/bin/sh\nexit 0\n");
+      assert.equal(syncAgentsview(bin), true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("returns false (best-effort, no throw) when sync fails", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-sync-"));
+    try {
+      const bin = writeExec(tmp, "#!/bin/sh\necho boom >&2\nexit 1\n");
+      assert.equal(syncAgentsview(bin), false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("returns false (no throw) when sync hangs past the timeout", () => {
+    // Mirrors the macOS launchd deadlock: the sync never returns, so the
+    // timeout must SIGKILL it and we fall through to a read instead of
+    // hanging the whole report.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-sync-"));
+    try {
+      const bin = writeExec(tmp, "#!/bin/sh\nsleep 30\n");
+      assert.equal(syncAgentsview(bin, 300), false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("collectAgentsviewUsage WARP_DIR scoping", () => {
   // A fake agentsview that records the WARP_DIR it received plus its args,
-  // then emits empty daily JSON so the caller parses cleanly. Proves the
-  // Warp-skip is scoped to the syncing call (the only one that runs the
-  // parser registry that hangs an unattended daemon), not the --no-sync one.
-  it("sets WARP_DIR=/var/empty on the syncing claude call but not the --no-sync codex call", () => {
+  // then emits empty daily JSON so the caller parses cleanly. With the
+  // deadlock fix, syncing is a standalone `agentsview sync` call (the only
+  // one that runs the parser registry that hangs an unattended daemon) and
+  // both reads pass --no-sync. So the Warp-skip must ride the sync call, not
+  // the reads.
+  it("sets WARP_DIR=/var/empty on the standalone sync call but not the --no-sync reads", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-warp-"));
     try {
       const logPath = path.join(tmp, "calls.log");
       const fakeBin = path.join(tmp, "agentsview");
       writeExec(
         fakeBin,
-        `#!/bin/sh\necho "WARP_DIR=\${WARP_DIR}|$*" >> "${logPath}"\necho '{"daily":[]}'\n`,
+        `#!/bin/sh\necho "WARP_DIR=\${WARP_DIR}|$*" >> "${logPath}"\ncase "$1" in sync) exit 0 ;; *) echo '{"daily":[]}' ;; esac\n`,
       );
 
       collectAgentsviewUsage(fakeBin, "20260501");
 
       const lines = fs.readFileSync(logPath, "utf-8").trim().split("\n");
+      const syncLine = lines.find((l) => l.includes("|sync"));
       const claudeLine = lines.find((l) => l.includes("--agent claude"));
       const codexLine = lines.find((l) => l.includes("--agent codex"));
-      assert.match(claudeLine, /WARP_DIR=\/var\/empty\|/);
-      assert.ok(codexLine.includes("--no-sync"), "codex call should pass --no-sync");
+      assert.match(syncLine, /WARP_DIR=\/var\/empty\|/);
+      assert.ok(claudeLine.includes("--no-sync"), "claude read should pass --no-sync");
+      assert.doesNotMatch(claudeLine, /WARP_DIR=\/var\/empty\|/);
+      assert.ok(codexLine.includes("--no-sync"), "codex read should pass --no-sync");
       assert.doesNotMatch(codexLine, /WARP_DIR=\/var\/empty\|/);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });

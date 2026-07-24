@@ -1,6 +1,6 @@
-# Tokenmaxxing Client
+# Builder Index Client
 
-Reports your Claude Code and Codex token usage to the [Tokenmaxxing Leaderboard](https://tokenmaxxing.odio.dev). Each user gets a shareable profile page at `tokenmaxxing.odio.dev/user/YOUR_NAME`.
+Reports your Claude Code and Codex token usage to the [Builder Index](https://www.watchmepivot.com/builder-index). Each user gets a shareable profile page at `www.watchmepivot.com/builder-index/u/YOUR_NAME`.
 
 ## Quick Start
 
@@ -63,12 +63,14 @@ npm install        # installs deps + builds dist/ (runs `npm run build` via prep
 Pick a unique username and provide your email. First come, first served.
 
 ```
-curl -s -X POST https://tokenmaxxing.odio.dev/api/register \
+curl -s -X POST https://www.watchmepivot.com/api/register \
   -H 'Content-Type: application/json' \
   -d '{"username":"YOUR_NAME", "email":"you@example.com"}'
 ```
 
-Save the returned API key — it cannot be retrieved later.
+Save the returned API key — it cannot be retrieved later. The response `profile` is your Builder Index page (`https://www.watchmepivot.com/builder-index/u/YOUR_NAME`).
+
+> **Hosts:** the public board is the **Builder Index** at `www.watchmepivot.com/builder-index`, and your profile is `www.watchmepivot.com/builder-index/u/YOUR_NAME`. Leave `SERVER_URL` unset — registration and reporting work out of the box.
 
 > Email is required at registration but kept private. It is never displayed or returned by any API.
 
@@ -88,7 +90,7 @@ cp .env.example .env
 | `COMMUNITIES` | No | What developer communities are you part of? |
 | `ABOUT` | No | The main content of your profile — describe your setup, link to tools you use, share blog posts/videos about your workflow. URLs are auto-linked. See [Profile Page](#profile-page) |
 | `DEMO_VIDEO_URL` | No | YouTube URL (**3 min or shorter**) showing your before/after AI coding workflow. Embedded on your profile page under "3-MIN DEMO VIDEO". |
-| `HN_USERNAME` | No | Your Hacker News username (e.g. `Sam_Odio`). Required to appear on the leaderboard — see [HN Verification](#appearing-on-the-leaderboard-hn-verification) |
+| `HN_USERNAME` | No | Your Hacker News username (e.g. `Sam_Odio`). Required to appear on the Builder Index — see [HN Verification](#appearing-on-the-builder-index-hn-verification) |
 | `OPENCLAW_SESSIONS_DIRS` | No | Override OpenClaw auto-discovery with a comma-separated list of session directories. Defaults to auto-discovery of standalone + Plow variants on macOS. See [OpenClaw Usage](#openclaw-usage). |
 | `REPORT_DAYS` | No | Days of history to report (default: `28`). See [Backfill & Optimization](#backfill--optimization) |
 | `REPORT_MACHINE_CONFIG` | No | Set to `true` to share machine info (OS, CPU, memory, installed skills, MCP servers, hooks, CLAUDE.md stats, shell/editor) on your profile. No prompts, code, or keys are ever sent. |
@@ -149,12 +151,12 @@ If you're updating an existing install, refer to the config table above and add 
 | Setting | What it does |
 |---------|-------------|
 | `REPORT_MACHINE_CONFIG=true` | Shares your machine setup (OS, CPU, memory, installed skills) on your [profile page](#profile-page). **No prompts, code, conversation history, or API keys are ever sent.** |
-| `PROJECTS=tkmx,plow.co` | Projects you're building. Shown as badges on your profile and leaderboard. |
-| `COMMUNITIES=bloomberg-ai-engineering,agentcribs-community` | Developer communities you're part of. Shown as badges on your profile and leaderboard. |
+| `PROJECTS=tkmx,plow.co` | Projects you're building. Shown as badges on your profile and the Builder Index. |
+| `COMMUNITIES=bloomberg-ai-engineering,agentcribs-community` | Developer communities you're part of. Shown as badges on your profile and the Builder Index. |
 | `ABOUT="..."` | Bio, config details, and links shown on your profile. Share your setup — blog posts, tweets, or videos where you've discussed your workflow. URLs are auto-linked. |
 | `REPORT_DAYS=1` | Only send the last day of new token-usage rows each cycle instead of 28. Session stats, Cursor stats, and other rolling-window aggregates always carry a fixed 28-day window and are unaffected. Recommended after your first sync. |
 | `DEMO_VIDEO_URL=https://www.youtube.com/watch?v=...` | YouTube demo video (**3 min or shorter**) embedded on your profile. Show before/after workflows — how you worked before AI tools vs. after. |
-| `HN_USERNAME=Sam_Odio` | Your Hacker News username. Required for leaderboard visibility — see [HN Verification](#appearing-on-the-leaderboard-hn-verification). |
+| `HN_USERNAME=Sam_Odio` | Your Hacker News username. Required for Builder Index visibility — see [HN Verification](#appearing-on-the-builder-index-hn-verification). |
 | `REPORT_DEV_STATS=true` | Shares how you code — tool frequencies, session stats, cache efficiency, git outcomes, Cursor attribution. See [Dev Stats](#dev-stats). |
 
 `CLIENT_ID` is auto-generated on first run and written to `.env` — you don't need to set it. If you already have one, it's kept as-is.
@@ -204,7 +206,7 @@ You can always do a manual full re-sync of the token-usage rows by temporarily s
 
 The client supports reporting from multiple machines under the same username. Each machine gets its own `CLIENT_ID` (auto-generated on first run), and the server tracks data per-machine. Setup on each machine is identical — just use the same `USERNAME`, `API_KEY`, and `TEAM` in `.env`.
 
-Your [profile page](https://tokenmaxxing.odio.dev) shows how many machines you're reporting from.
+Your [profile page](https://www.watchmepivot.com/builder-index) shows how many machines you're reporting from.
 
 ### Aggregating from synced remote machines
 
@@ -258,7 +260,7 @@ The override replaces the auto-discovered list entirely. Each directory is scann
 
 ## Profile Page
 
-Each user gets a shareable profile at `https://tokenmaxxing.odio.dev/user/YOUR_NAME` showing:
+Each user gets a shareable profile at `https://www.watchmepivot.com/builder-index/u/YOUR_NAME` showing:
 
 - Token usage stats (28-day and all-time)
 - Claude vs Codex cost breakdown
@@ -291,24 +293,24 @@ DEMO_VIDEO_URL=https://www.youtube.com/watch?v=YiDcgyAn-88
 
 **Why 3 minutes?** It's a social contract. The discipline of cutting to 3 minutes is also what forces the demo to be actually good — if you can't show the transformation in that time, the transformation isn't as clear as you thought, and watching a longer cut won't fix it.
 
-## Appearing on the Leaderboard (HN Verification)
+## Appearing on the Builder Index (HN Verification)
 
-To prevent fake accounts, new users must verify a Hacker News account to appear on the leaderboard. Here's how:
+To prevent fake accounts, new users must verify a Hacker News account to appear on the Builder Index. Here's how:
 
 1. Set `HN_USERNAME` in your `.env` (e.g. `HN_USERNAME=Sam_Odio`)
 2. Run `npm run report` so the server knows your HN username
-3. Add your tkmx profile URL to your [HN about section](https://news.ycombinator.com/user). For example, see [Sam_Odio's HN profile](https://news.ycombinator.com/user?id=Sam_Odio) — the about field includes `https://tkmx.odio.dev/user/samodio`
-4. Visit your tkmx profile and click "Verify"
+3. Add your Builder Index profile URL to your [HN about section](https://news.ycombinator.com/user). For example, see [Sam_Odio's HN profile](https://news.ycombinator.com/user?id=Sam_Odio) — the about field includes `https://www.watchmepivot.com/builder-index/u/samodio`
+4. Visit your Builder Index profile and click "Verify"
 
 HN may cache your about section for a few minutes. If verification fails, wait a minute and try again.
 
-You can still register, report usage, and view your profile without verification — you just won't appear on the public leaderboard.
+You can still register, report usage, and view your profile without verification — you just won't appear on the public Builder Index.
 
 ## Tools, Projects & Communities
 
 Everyone's tweeting about the latest hot AI tool, but most of it is vaporware. By listing what you actually use day-to-day, you help the developer community see what's real and what's hype. Your usage data — backed by actual token spend — shows what tools people are building with in production, not just what they tried once and posted about.
 
-All three fields show as clickable badges on your profile and the leaderboard.
+All three fields show as clickable badges on your profile and the Builder Index.
 
 ```
 TOOLS=superpowers,arsenal
@@ -318,7 +320,7 @@ COMMUNITIES=bloomberg-ai-engineering,agentcribs-community
 
 - **TOOLS** — What AI coding tools do you actually use daily? Only list what you really use, not everything you've tried.
 - **PROJECTS** — What are you spending tokens on? The projects you're actively building with AI. Shows up as "building:" on your profile.
-- **COMMUNITIES** — What developer communities are you part of? Clickable filters on the leaderboard.
+- **COMMUNITIES** — What developer communities are you part of? Clickable filters on the Builder Index.
 
 ### Known Tools
 

@@ -385,7 +385,8 @@ async function main(): Promise<void> {
   const response = await postUsage(JSON.stringify(body));
   saveState(STATE_PATH, currentState);
 
-  const profileUrl = `${SERVER_URL}/user/${USERNAME}`;
+  // Human-facing profile lives on the Builder Index (watchmepivot), not the API host (SERVER_URL).
+  const profileUrl = `https://www.watchmepivot.com/builder-index/u/${USERNAME}`;
   console.log(`  Profile: ${profileUrl}`);
 
   if (!TOOLS) console.log(`  Set TOOLS in .env — which AI tools you use daily (e.g. superpowers,paperclip)`);
@@ -395,9 +396,9 @@ async function main(): Promise<void> {
   if (!DEMO_VIDEO_URL) console.log(`  Set DEMO_VIDEO_URL in .env — a 3-min demo of your AI workflow`);
 
   if (!HN_USERNAME) {
-    console.log(`  Set HN_USERNAME in .env to unlock leaderboard visibility`);
+    console.log(`  Set HN_USERNAME in .env to appear on the Builder Index`);
   } else {
-    console.log(`  Verify your HN account at your profile page to appear on the leaderboard`);
+    console.log(`  Verify your HN account on your Builder Index profile (${profileUrl}) to appear on the Builder Index`);
   }
 
   if (response && response.client_update) {
