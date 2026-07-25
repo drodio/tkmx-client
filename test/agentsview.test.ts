@@ -4,7 +4,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs";
 
-import { parseAgentsviewOutput, toIsoDate, collectAgentsviewUsage, syncAgentsview, resolveAgentsviewWith } from "../reporter/agentsview";
+import { parseAgentsviewOutput, toIsoDate, collectAgentsviewUsage, syncAgentsview, resolveAgentsviewWith, queryTimeoutMs, DEFAULT_QUERY_TIMEOUT_MS, MAX_QUERY_TIMEOUT_MS, resetTimeoutWarningForTest, collectAgentsviewAgentOnly } from "../reporter/agentsview";
 
 // Write an executable fixture (default: a no-op shell stub) and mark it +x.
 function writeExec(p, body = "#!/bin/sh\n") {
@@ -318,5 +318,196 @@ describe("resolveAgentsviewWith — Windows branch (host-independent)", () => {
       isExecutable: (p) => p === shim,
     });
     assert.equal(found, null);
+  });
+});
+
+// The reporter's read queries are its only FATAL agentsview call — a timeout
+// there aborts the whole run and posts nothing (observed in the wild: a 1.2 GB
+// index under launchd blew the old fixed 180s budget every few runs). The
+// budget is therefore generous by default and tunable per-machine, so a slow
+// index degrades into a slow report rather than a lost one.
+// Collect console.error output, resetting the process-global warn-once latch
+// first so a warning latched by an earlier case can't swallow this one's.
+function captureStderr(fn: () => void): string[] {
+  const orig = console.error;
+  const lines: string[] = [];
+  console.error = (msg?: unknown) => { lines.push(String(msg)); };
+  try {
+    resetTimeoutWarningForTest();
+    fn();
+  } finally {
+    console.error = orig;
+    resetTimeoutWarningForTest();
+  }
+  return lines;
+}
+
+function withTimeoutEnv(value: string | undefined, fn: () => void): void {
+  const orig = process.env.AGENTSVIEW_TIMEOUT_MS;
+  if (value === undefined) delete process.env.AGENTSVIEW_TIMEOUT_MS;
+  else process.env.AGENTSVIEW_TIMEOUT_MS = value;
+  try { fn(); } finally {
+    if (orig === undefined) delete process.env.AGENTSVIEW_TIMEOUT_MS;
+    else process.env.AGENTSVIEW_TIMEOUT_MS = orig;
+  }
+}
+
+describe("queryTimeoutMs", () => {
+  it("defaults to 10 minutes when unset", () => {
+    withTimeoutEnv(undefined, () => {
+      assert.equal(queryTimeoutMs(), DEFAULT_QUERY_TIMEOUT_MS);
+      assert.equal(DEFAULT_QUERY_TIMEOUT_MS, 600_000);
+    });
+  });
+
+  it("is more generous than the 180s budget that was timing out", () => {
+    assert.ok(DEFAULT_QUERY_TIMEOUT_MS > 180_000);
+  });
+
+  it("honours a valid AGENTSVIEW_TIMEOUT_MS override", () => {
+    withTimeoutEnv("45000", () => assert.equal(queryTimeoutMs(), 45_000));
+  });
+
+  it("falls back to the default for non-numeric, zero, or negative values", () => {
+    for (const bad of ["", "   ", "abc", "0", "-1"]) {
+      withTimeoutEnv(bad, () => assert.equal(queryTimeoutMs(), DEFAULT_QUERY_TIMEOUT_MS));
+    }
+  });
+
+  // parseInt would keep the leading digits of each of these and hand back a
+  // sub-second budget, which aborts every read — the failure this whole change
+  // exists to prevent, reintroduced by a plausible operator typo.
+  it("rejects unit-suffixed and exponent forms instead of truncating them", () => {
+    for (const bad of ["10m", "600s", "1e6", "60_000", "10.5", " 10m "]) {
+      withTimeoutEnv(bad, () => assert.equal(queryTimeoutMs(), DEFAULT_QUERY_TIMEOUT_MS));
+    }
+  });
+
+  // An extra run of zeros is the same typo class from the other direction: it
+  // parses cleanly but would disable the backstop, or (at the far end) make
+  // spawnSync throw ERR_OUT_OF_RANGE and turn a config typo into a fatal run.
+  // Clamped, NOT dropped to the default: an operator raising the budget after
+  // watching an hour-long read must never silently get LESS than they asked for.
+  it("clamps an above-ceiling value to the ceiling rather than the default", () => {
+    for (const big of [String(MAX_QUERY_TIMEOUT_MS + 1), "7200000", "6000000000000"]) {
+      withTimeoutEnv(big, () => assert.equal(queryTimeoutMs(), MAX_QUERY_TIMEOUT_MS));
+    }
+  });
+
+  it("falls back to the default when the value exceeds safe-integer range", () => {
+    withTimeoutEnv("9".repeat(400), () => assert.equal(queryTimeoutMs(), DEFAULT_QUERY_TIMEOUT_MS));
+  });
+
+  it("accepts a value exactly at the ceiling", () => {
+    withTimeoutEnv(String(MAX_QUERY_TIMEOUT_MS), () => assert.equal(queryTimeoutMs(), MAX_QUERY_TIMEOUT_MS));
+  });
+
+  // The comment promises a rejection is LOUD. Without this, a silent fallback
+  // would keep the whole suite green while violating the documented contract.
+  it("warns on stderr naming the rejected value", () => {
+    const lines = captureStderr(() => withTimeoutEnv("10m", () => queryTimeoutMs()));
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /AGENTSVIEW_TIMEOUT_MS/);
+    assert.match(lines[0], /10m/);
+    // Must NOT quote a ceiling: above-ceiling values clamp, they don't reject,
+    // so naming an upper bound here would state a rule that isn't applied.
+    assert.doesNotMatch(lines[0], new RegExp(String(MAX_QUERY_TIMEOUT_MS)));
+  });
+
+  // The operationally surprising case: the operator asked for 7200000 and got
+  // 3600000. If that warning is ever dropped or garbled the change is silent,
+  // so assert it directly rather than relying on the return value alone.
+  it("warns on stderr naming both the requested value and the ceiling when clamping", () => {
+    const lines = captureStderr(() => withTimeoutEnv("7200000", () => queryTimeoutMs()));
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /AGENTSVIEW_TIMEOUT_MS/);
+    assert.match(lines[0], /7200000/);
+    assert.match(lines[0], new RegExp(String(MAX_QUERY_TIMEOUT_MS)));
+  });
+
+  // One bad value is resolved once per agentsview home; without the latch the
+  // operator greps their log and finds N copies of the same line.
+  it("warns only once even across repeated resolutions", () => {
+    const lines = captureStderr(() =>
+      withTimeoutEnv("abc", () => { queryTimeoutMs(); queryTimeoutMs(); queryTimeoutMs(); }),
+    );
+    assert.equal(lines.length, 1);
+  });
+
+  it("accepts a bare integer with surrounding whitespace", () => {
+    withTimeoutEnv("  45000  ", () => assert.equal(queryTimeoutMs(), 45_000));
+  });
+});
+
+describe("query failure reporting", () => {
+  // .env.example tells operators to raise the budget when they see a timeout,
+  // so the timeout has to survive a child that wrote to stderr on its way out —
+  // otherwise the documented diagnostic is missing in exactly the slow-index
+  // case it targets.
+  it("names the timeout even when the killed child also wrote to stderr", { skip: process.platform === "win32" }, () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-noisy-"));
+    try {
+      const fakeBin = path.join(tmp, "agentsview");
+      // Exit the sync leg immediately — collectAgentsviewUsage syncs before it
+      // reads, and a stub that slept there too would burn 5s of suite time in a
+      // path this test isn't exercising.
+      writeExec(fakeBin, `#!/bin/sh\n[ "$1" = sync ] && exit 0\necho "warning: index is cold" >&2\nsleep 5\n`);
+      withTimeoutEnv("250", () => {
+        assert.throws(
+          () => collectAgentsviewUsage(fakeBin, "20260501"),
+          (err: Error) => /ETIMEDOUT after 250ms/.test(err.message) && /index is cold/.test(err.message),
+        );
+      });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  // Proves the env var reaches the actual execFileSync budget, not just the
+  // helper — a fake binary that outlives a deliberately tiny timeout must
+  // surface as a thrown query failure rather than a silent empty result.
+  //
+  // Also asserts WALL CLOCK, not just the error text. Without that, a
+  // regression to an unenforced budget (the child outliving its kill and
+  // holding the pipes open) still throws the same message and would pass
+  // silently — the elapsed-time bound is what makes "backstop, not floor"
+  // an actually tested claim. This test doubles as the env-resolved-at-call-time
+  // check: the value is set after import and must reach the default parameter.
+  it("enforces the resolved budget in wall-clock time, not just in the message", { skip: process.platform === "win32" }, () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-timeout-"));
+    try {
+      const fakeBin = path.join(tmp, "agentsview");
+      writeExec(fakeBin, `#!/bin/sh\n[ "$1" = sync ] && exit 0\nsleep 30\necho '{"daily":[]}'\n`);
+      withTimeoutEnv("250", () => {
+        const t0 = process.hrtime.bigint();
+        assert.throws(() => collectAgentsviewUsage(fakeBin, "20260501"), /query failed/);
+        const elapsedMs = Number(process.hrtime.bigint() - t0) / 1e6;
+        assert.ok(elapsedMs < 5000, `expected the 250ms budget to be enforced, took ${Math.round(elapsedMs)}ms`);
+      });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  // The extra-homes path was switched off the same 180s literal, and its failure
+  // is escalated to fatal by collectExtraAgentsviewHomes — so it needs the same
+  // proof that the budget reaches its exec.
+  it("applies the resolved budget to collectAgentsviewAgentOnly too", { skip: process.platform === "win32" }, () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-home-"));
+    try {
+      const fakeBin = path.join(tmp, "agentsview");
+      writeExec(fakeBin, `#!/bin/sh\n[ "$1" = sync ] && exit 0\nsleep 30\necho '{"daily":[]}'\n`);
+      withTimeoutEnv("250", () => {
+        const t0 = process.hrtime.bigint();
+        assert.throws(
+          () => collectAgentsviewAgentOnly(fakeBin, "20260501", "claude", {}),
+          /ETIMEDOUT after 250ms/,
+        );
+        const elapsedMs = Number(process.hrtime.bigint() - t0) / 1e6;
+        assert.ok(elapsedMs < 5000, `expected the 250ms budget to be enforced, took ${Math.round(elapsedMs)}ms`);
+      });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

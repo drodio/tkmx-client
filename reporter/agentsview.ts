@@ -130,6 +130,87 @@ export function detectAgentsviewVersion(bin: string | null, timeoutMs: number = 
   return m ? m[1] : null;
 }
 
+// Budget for a single agentsview READ query (`usage daily --no-sync`).
+//
+// Reads are the reporter's only fatal agentsview call: sync is best-effort
+// (syncAgentsview swallows its own timeout) and session stats degrade to null,
+// but a read timeout aborts the run and posts nothing for that cycle. The cost
+// of a read is dominated by contention, not by the query window — on a 1.2 GB
+// index a 1-day read and a 7-day read both measured ~15s idle, spiking past 55s
+// while concurrent agents hammered the same sqlite file, and that spike blew
+// the old fixed 180s budget under launchd (2h cadence, so a single unlucky
+// landing silently dropped a whole cycle).
+//
+// So the default is deliberately generous rather than tight: a slow index
+// should degrade into a slow report, never a lost one. There is no cost to
+// over-budgeting — the timeout is a backstop, not a schedule, and a healthy
+// read still returns in seconds. AGENTSVIEW_TIMEOUT_MS tunes it per-machine
+// for indexes larger than this one.
+export const DEFAULT_QUERY_TIMEOUT_MS = 600_000;
+
+// Parsing is strict-integer, NOT parseInt. parseInt stops at the first
+// non-digit and keeps the prefix, so the natural way an operator writes a
+// duration — "10m", "600s", "1e6" — would silently become 10ms, 600ms, 1ms.
+// Every read would then abort instantly with ETIMEDOUT and the run would post
+// nothing: the exact failure this budget exists to prevent, reintroduced by a
+// plausible typo. A rejected value is loud (stderr) rather than silent, since
+// the operator who set it is by definition already chasing a timeout.
+// Upper bound guards the same typo class from the other direction: an extra run
+// of zeros passes /^\d+$/ and would silently disable the backstop, letting a
+// wedged child hold the run open indefinitely; a value large enough to reach
+// Infinity makes spawnSync throw ERR_OUT_OF_RANGE, turning a config typo into a
+// fatal run. An hour is far past any legitimate read.
+export const MAX_QUERY_TIMEOUT_MS = 3_600_000;
+
+// Warn at most once per process. Resolution stays lazy (dotenv populates
+// process.env after this module is imported, so the value must NOT be hoisted
+// to a module-level const), and queryTimeoutMs is re-evaluated per agentsview
+// home — without this, one bad value would print N identical lines into the
+// very log the operator is grepping.
+let warnedInvalidTimeout = false;
+
+function warnOnce(message: string): void {
+  if (warnedInvalidTimeout) return;
+  warnedInvalidTimeout = true;
+  console.error(message);
+}
+
+export function queryTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = (env.AGENTSVIEW_TIMEOUT_MS || "").trim();
+  if (!raw) return DEFAULT_QUERY_TIMEOUT_MS;
+  const value = /^\d+$/.test(raw) ? Number(raw) : NaN;
+  // No ceiling in this message: above-ceiling values clamp rather than reject,
+  // so quoting an upper bound here would state a rule that isn't the one being
+  // applied. Only non-numeric, zero, negative, and unsafe-integer input lands
+  // in this branch.
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    warnOnce(
+      `  ignoring invalid AGENTSVIEW_TIMEOUT_MS=${JSON.stringify(raw)} ` +
+      `(expected a positive whole number of milliseconds); ` +
+      `using ${DEFAULT_QUERY_TIMEOUT_MS}`,
+    );
+    return DEFAULT_QUERY_TIMEOUT_MS;
+  }
+  // Clamp rather than fall back: someone who sets 7200000 after watching an
+  // hour-long read wants MORE budget, and dropping them to the 600000 default
+  // would hand back LESS than they asked for — reintroducing the aborted cycle
+  // the flag exists to prevent. The typo case (6000000000000) clamps to the
+  // ceiling too, which is still a working backstop.
+  if (value > MAX_QUERY_TIMEOUT_MS) {
+    warnOnce(
+      `  clamping AGENTSVIEW_TIMEOUT_MS=${raw} to the ${MAX_QUERY_TIMEOUT_MS}ms ceiling`,
+    );
+    return MAX_QUERY_TIMEOUT_MS;
+  }
+  return value;
+}
+
+// Test seam: the warn-once latch is process-global, so tests that assert the
+// warning fires need to reset it between cases.
+export function resetTimeoutWarningForTest(): void {
+  warnedInvalidTimeout = false;
+}
+
 export function toIsoDate(sinceStr: string): string {
   return `${sinceStr.slice(0, 4)}-${sinceStr.slice(4, 6)}-${sinceStr.slice(6, 8)}`;
 }
@@ -189,7 +270,24 @@ function queryAgent(
 ): DailyUsage[] {
   const args = ["usage", "daily", "--json", "--breakdown", "--agent", agent, "--since", since];
   if (noSync) args.push("--no-sync");
-  const execOpts: Parameters<typeof execFileSync>[2] = { encoding: "utf-8", timeout: timeoutMs };
+  // SIGKILL for parity with syncAgentsview: spawnSync blocks until the child
+  // actually exits after the kill signal is sent, so a read that ignores or
+  // slow-handles SIGTERM would make this budget an unenforceable floor rather
+  // than a backstop — the lost-cycle failure again, now with a 10-minute head
+  // start. SIGKILL can't be caught. Node still sets code === "ETIMEDOUT".
+  //
+  // Scope, so nobody over-trusts this: the budget bounds the DIRECT child only.
+  // spawnSync keeps pumping until the stdio pipes hit EOF, so a grandchild that
+  // inherited stdout/stderr can hold the call open past timeoutMs even after the
+  // child is reaped. Bounding a whole process tree would need detached spawn +
+  // process.kill(-pid), which spawnSync can't express. agentsview is a single
+  // static binary that spawns no helpers, so the direct-child bound is the real
+  // bound here — this note is for whoever points this code at something else.
+  const execOpts: Parameters<typeof execFileSync>[2] = {
+    encoding: "utf-8",
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+  };
   const env: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
   if (!noSync) env.WARP_DIR = WARP_SKIP_DIR;
   execOpts.env = env;
@@ -198,8 +296,24 @@ function queryAgent(
     raw = execFileSync(bin, args, execOpts) as string;
   } catch (err) {
     const stderr = (err as { stderr?: Buffer }).stderr?.toString().trim() || "";
-    const detail = stderr ? `: ${stderr}` : `: ${errMessage(err)}`;
-    throw new Error(`agentsview ${agent} query failed${detail}`);
+    // A timed-out read is the failure operators are told to grep for, but a
+    // slow agentsview often writes a progress/warning line to stderr before
+    // it's reaped — and stderr alone would then be the whole message, hiding
+    // the timeout. Keep the literal ETIMEDOUT token (what .env.example and the
+    // reporter log point at) and add the budget, so the diagnostic survives a
+    // noisy child.
+    //
+    // Keyed on code alone: Node sets ETIMEDOUT whenever the timeout fired, while
+    // SIGTERM is equally what an external killer sends (launchd tearing down the
+    // job, an operator `kill`). Treating a signal as proof of timeout would
+    // report "timed out after 600000ms" for a run that lasted seconds and send
+    // someone chasing a slow index that isn't slow.
+    const timedOut = (err as { code?: string }).code === "ETIMEDOUT";
+    const parts = [
+      timedOut ? `ETIMEDOUT after ${timeoutMs}ms` : "",
+      stderr || (timedOut ? "" : errMessage(err)),
+    ].filter(Boolean);
+    throw new Error(`agentsview ${agent} query failed: ${parts.join("; ")}`);
   }
   return parseAgentsviewOutput(JSON.parse(raw), agent);
 }
@@ -254,7 +368,7 @@ export function syncAgentsview(
   }
 }
 
-export function collectAgentsviewUsage(bin: string, sinceStr: string, timeoutMs: number = 180000): { claudeDaily: DailyUsage[]; codexDaily: DailyUsage[] } {
+export function collectAgentsviewUsage(bin: string, sinceStr: string, timeoutMs: number = queryTimeoutMs()): { claudeDaily: DailyUsage[]; codexDaily: DailyUsage[] } {
   const since = toIsoDate(sinceStr);
 
   // One sync pass covers every agent: agentsview's syncAllLocked
@@ -279,7 +393,7 @@ export function collectAgentsviewUsage(bin: string, sinceStr: string, timeoutMs:
 // but under a launchd deadlock we still degrade to "no rows for this home"
 // rather than failing the whole report (the prior behavior). The read runs
 // --no-sync to stay deadlock-free, same as the local path above.
-export function collectAgentsviewAgentOnly(bin: string, sinceStr: string, agent: string, env: Record<string, string>, timeoutMs: number = 180000): DailyUsage[] {
+export function collectAgentsviewAgentOnly(bin: string, sinceStr: string, agent: string, env: Record<string, string>, timeoutMs: number = queryTimeoutMs()): DailyUsage[] {
   const since = toIsoDate(sinceStr);
   syncAgentsview(bin, 90000, env);
   return queryAgent(bin, since, agent, true, timeoutMs, env);
