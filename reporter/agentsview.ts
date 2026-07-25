@@ -179,10 +179,14 @@ export function queryTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
   const raw = (env.AGENTSVIEW_TIMEOUT_MS || "").trim();
   if (!raw) return DEFAULT_QUERY_TIMEOUT_MS;
   const value = /^\d+$/.test(raw) ? Number(raw) : NaN;
+  // No ceiling in this message: above-ceiling values clamp rather than reject,
+  // so quoting an upper bound here would state a rule that isn't the one being
+  // applied. Only non-numeric, zero, negative, and unsafe-integer input lands
+  // in this branch.
   if (!Number.isSafeInteger(value) || value <= 0) {
     warnOnce(
       `  ignoring invalid AGENTSVIEW_TIMEOUT_MS=${JSON.stringify(raw)} ` +
-      `(expected a whole number of milliseconds in 1..${MAX_QUERY_TIMEOUT_MS}); ` +
+      `(expected a positive whole number of milliseconds); ` +
       `using ${DEFAULT_QUERY_TIMEOUT_MS}`,
     );
     return DEFAULT_QUERY_TIMEOUT_MS;
@@ -271,6 +275,14 @@ function queryAgent(
   // slow-handles SIGTERM would make this budget an unenforceable floor rather
   // than a backstop — the lost-cycle failure again, now with a 10-minute head
   // start. SIGKILL can't be caught. Node still sets code === "ETIMEDOUT".
+  //
+  // Scope, so nobody over-trusts this: the budget bounds the DIRECT child only.
+  // spawnSync keeps pumping until the stdio pipes hit EOF, so a grandchild that
+  // inherited stdout/stderr can hold the call open past timeoutMs even after the
+  // child is reaped. Bounding a whole process tree would need detached spawn +
+  // process.kill(-pid), which spawnSync can't express. agentsview is a single
+  // static binary that spawns no helpers, so the direct-child bound is the real
+  // bound here — this note is for whoever points this code at something else.
   const execOpts: Parameters<typeof execFileSync>[2] = {
     encoding: "utf-8",
     timeout: timeoutMs,

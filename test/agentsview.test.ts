@@ -326,6 +326,22 @@ describe("resolveAgentsviewWith — Windows branch (host-independent)", () => {
 // index under launchd blew the old fixed 180s budget every few runs). The
 // budget is therefore generous by default and tunable per-machine, so a slow
 // index degrades into a slow report rather than a lost one.
+// Collect console.error output, resetting the process-global warn-once latch
+// first so a warning latched by an earlier case can't swallow this one's.
+function captureStderr(fn: () => void): string[] {
+  const orig = console.error;
+  const lines: string[] = [];
+  console.error = (msg?: unknown) => { lines.push(String(msg)); };
+  try {
+    resetTimeoutWarningForTest();
+    fn();
+  } finally {
+    console.error = orig;
+    resetTimeoutWarningForTest();
+  }
+  return lines;
+}
+
 function withTimeoutEnv(value: string | undefined, fn: () => void): void {
   const orig = process.env.AGENTSVIEW_TIMEOUT_MS;
   if (value === undefined) delete process.env.AGENTSVIEW_TIMEOUT_MS;
@@ -388,44 +404,34 @@ describe("queryTimeoutMs", () => {
 
   // The comment promises a rejection is LOUD. Without this, a silent fallback
   // would keep the whole suite green while violating the documented contract.
-  it("warns on stderr naming the rejected value and the ceiling", () => {
-    const orig = console.error;
-    const lines: string[] = [];
-    console.error = (msg?: unknown) => { lines.push(String(msg)); };
-    try {
-      resetTimeoutWarningForTest();
-      withTimeoutEnv("10m", () => queryTimeoutMs());
-    } finally {
-      console.error = orig;
-    }
+  it("warns on stderr naming the rejected value", () => {
+    const lines = captureStderr(() => withTimeoutEnv("10m", () => queryTimeoutMs()));
     assert.equal(lines.length, 1);
     assert.match(lines[0], /AGENTSVIEW_TIMEOUT_MS/);
     assert.match(lines[0], /10m/);
+    // Must NOT quote a ceiling: above-ceiling values clamp, they don't reject,
+    // so naming an upper bound here would state a rule that isn't applied.
+    assert.doesNotMatch(lines[0], new RegExp(String(MAX_QUERY_TIMEOUT_MS)));
+  });
+
+  // The operationally surprising case: the operator asked for 7200000 and got
+  // 3600000. If that warning is ever dropped or garbled the change is silent,
+  // so assert it directly rather than relying on the return value alone.
+  it("warns on stderr naming both the requested value and the ceiling when clamping", () => {
+    const lines = captureStderr(() => withTimeoutEnv("7200000", () => queryTimeoutMs()));
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /AGENTSVIEW_TIMEOUT_MS/);
+    assert.match(lines[0], /7200000/);
     assert.match(lines[0], new RegExp(String(MAX_QUERY_TIMEOUT_MS)));
   });
 
   // One bad value is resolved once per agentsview home; without the latch the
   // operator greps their log and finds N copies of the same line.
   it("warns only once even across repeated resolutions", () => {
-    const orig = console.error;
-    const lines: string[] = [];
-    console.error = (msg?: unknown) => { lines.push(String(msg)); };
-    try {
-      resetTimeoutWarningForTest();
-      withTimeoutEnv("abc", () => { queryTimeoutMs(); queryTimeoutMs(); queryTimeoutMs(); });
-    } finally {
-      console.error = orig;
-    }
+    const lines = captureStderr(() =>
+      withTimeoutEnv("abc", () => { queryTimeoutMs(); queryTimeoutMs(); queryTimeoutMs(); }),
+    );
     assert.equal(lines.length, 1);
-  });
-
-  // Pins laziness. report.ts loads dotenv AFTER importing this module, so a
-  // module-level `const budget = queryTimeoutMs()` would read the env before
-  // .env is applied and silently ignore the operator's setting — with every
-  // other test in this file still passing.
-  it("resolves the env var at call time, not at import time", () => {
-    withTimeoutEnv("45000", () => assert.equal(queryTimeoutMs(), 45_000));
-    withTimeoutEnv("90000", () => assert.equal(queryTimeoutMs(), 90_000));
   });
 
   it("accepts a bare integer with surrounding whitespace", () => {
@@ -460,13 +466,23 @@ describe("query failure reporting", () => {
   // Proves the env var reaches the actual execFileSync budget, not just the
   // helper — a fake binary that outlives a deliberately tiny timeout must
   // surface as a thrown query failure rather than a silent empty result.
-  it("applies the resolved budget to the real query exec", { skip: process.platform === "win32" }, () => {
+  //
+  // Also asserts WALL CLOCK, not just the error text. Without that, a
+  // regression to an unenforced budget (the child outliving its kill and
+  // holding the pipes open) still throws the same message and would pass
+  // silently — the elapsed-time bound is what makes "backstop, not floor"
+  // an actually tested claim. This test doubles as the env-resolved-at-call-time
+  // check: the value is set after import and must reach the default parameter.
+  it("enforces the resolved budget in wall-clock time, not just in the message", { skip: process.platform === "win32" }, () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-timeout-"));
     try {
       const fakeBin = path.join(tmp, "agentsview");
-      writeExec(fakeBin, `#!/bin/sh\n[ "$1" = sync ] && exit 0\nsleep 5\necho '{"daily":[]}'\n`);
+      writeExec(fakeBin, `#!/bin/sh\n[ "$1" = sync ] && exit 0\nsleep 30\necho '{"daily":[]}'\n`);
       withTimeoutEnv("250", () => {
+        const t0 = process.hrtime.bigint();
         assert.throws(() => collectAgentsviewUsage(fakeBin, "20260501"), /query failed/);
+        const elapsedMs = Number(process.hrtime.bigint() - t0) / 1e6;
+        assert.ok(elapsedMs < 5000, `expected the 250ms budget to be enforced, took ${Math.round(elapsedMs)}ms`);
       });
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
@@ -480,12 +496,15 @@ describe("query failure reporting", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-home-"));
     try {
       const fakeBin = path.join(tmp, "agentsview");
-      writeExec(fakeBin, `#!/bin/sh\n[ "$1" = sync ] && exit 0\nsleep 5\necho '{"daily":[]}'\n`);
+      writeExec(fakeBin, `#!/bin/sh\n[ "$1" = sync ] && exit 0\nsleep 30\necho '{"daily":[]}'\n`);
       withTimeoutEnv("250", () => {
+        const t0 = process.hrtime.bigint();
         assert.throws(
           () => collectAgentsviewAgentOnly(fakeBin, "20260501", "claude", {}),
           /ETIMEDOUT after 250ms/,
         );
+        const elapsedMs = Number(process.hrtime.bigint() - t0) / 1e6;
+        assert.ok(elapsedMs < 5000, `expected the 250ms budget to be enforced, took ${Math.round(elapsedMs)}ms`);
       });
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });

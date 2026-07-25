@@ -104,6 +104,33 @@ in follow-up commit rather than another amend, per the roborev contract:
 
 Final: typecheck clean, 137 tests / 132 pass / 5 pre-existing failures (below).
 
+Fourth roborev round (review on 5b3081a) — four more, all VALID, all fixed:
+
+- **Reject message quoted a ceiling it no longer enforces.** Introduced by the
+  clamp change in 5b3081a: above-ceiling values clamp, so only non-numeric / zero
+  / negative / unsafe-integer input reaches that branch. Reworded; the test now
+  asserts the ceiling is *absent* there and present in the clamp message.
+- **Clamp path had no warning coverage** — the operationally surprising case
+  (asked for 7200000, got 3600000) could go silent. Added, with a shared
+  `captureStderr` helper that resets the warn-once latch before and after so
+  warning state can't leak between cases.
+- **Timeout tests asserted only the message, never elapsed time.** A regression to
+  an unenforced budget throws the identical error and would have passed. Both now
+  bound wall-clock against a `sleep 30` stub — and empirically the budget IS
+  enforced: ~610ms and ~690ms against a 250ms budget, so the direct-child SIGKILL
+  reaps in practice.
+- **"resolves at call time" test didn't test its contract** — mechanically
+  identical to two neighbours, and it called `queryTimeoutMs()` directly rather
+  than exercising a caller's default parameter. Dropped; the wall-clock test now
+  carries that contract, since it sets the env after import and the value must
+  reach `collectAgentsviewUsage`'s default parameter to take effect.
+
+Documented the real scope of the SIGKILL guarantee next to it: the budget bounds
+the DIRECT child, since `spawnSync` pumps until the stdio pipes hit EOF and a
+grandchild holding stdout/stderr could outlive the kill. agentsview is a single
+static binary that spawns no helpers, so the bound is real here — the note is for
+whoever points this code at something else.
+
 ### Beads activity:
 - None — no `bd` database in this repo (`bd` not initialized here).
 
