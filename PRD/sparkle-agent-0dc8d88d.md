@@ -83,6 +83,27 @@ Second roborev round on the amended commit raised three more, all fixed:
   wall-clock for no coverage. Stubs now `exit 0` on `sync`; those two tests went
   from ~5.9s each to ~0.7s.
 
+Third roborev round (review 46893) raised four more — all judged VALID and fixed
+in follow-up commit rather than another amend, per the roborev contract:
+
+- **Read exec had no `killSignal`, unlike `syncAgentsview`.** `spawnSync` blocks
+  until the child exits after the signal is sent, so a read that ignores SIGTERM
+  made the 10-minute budget an unenforceable floor — the lost-cycle failure again,
+  with a longer head start. Now `killSignal: "SIGKILL"` for parity.
+- **Above-ceiling values fell back to the default instead of clamping.** Someone
+  setting `7200000` after watching hour-long reads would silently get `600000` —
+  *less* than they asked for. Now clamps to `MAX_QUERY_TIMEOUT_MS`; the default
+  fallback is kept only for unparseable / zero / negative / unsafe-integer input.
+- **Warning fired once per agentsview home.** Latched to warn-once per process
+  (`warnOnce`), while keeping resolution lazy.
+- **Test gaps.** Added: stderr capture proving the rejection is actually loud and
+  names both the value and the ceiling; a warn-once assertion; a test pinning
+  call-time (not import-time) resolution, which is what keeps dotenv working since
+  `report.ts` loads `.env` after importing this module; and timeout coverage for
+  `collectAgentsviewAgentOnly`, the extra-homes path whose failure is fatal.
+
+Final: typecheck clean, 137 tests / 132 pass / 5 pre-existing failures (below).
+
 ### Beads activity:
 - None — no `bd` database in this repo (`bd` not initialized here).
 

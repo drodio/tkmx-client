@@ -4,7 +4,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs";
 
-import { parseAgentsviewOutput, toIsoDate, collectAgentsviewUsage, syncAgentsview, resolveAgentsviewWith, queryTimeoutMs, DEFAULT_QUERY_TIMEOUT_MS, MAX_QUERY_TIMEOUT_MS } from "../reporter/agentsview";
+import { parseAgentsviewOutput, toIsoDate, collectAgentsviewUsage, syncAgentsview, resolveAgentsviewWith, queryTimeoutMs, DEFAULT_QUERY_TIMEOUT_MS, MAX_QUERY_TIMEOUT_MS, resetTimeoutWarningForTest, collectAgentsviewAgentOnly } from "../reporter/agentsview";
 
 // Write an executable fixture (default: a no-op shell stub) and mark it +x.
 function writeExec(p, body = "#!/bin/sh\n") {
@@ -370,14 +370,62 @@ describe("queryTimeoutMs", () => {
   // An extra run of zeros is the same typo class from the other direction: it
   // parses cleanly but would disable the backstop, or (at the far end) make
   // spawnSync throw ERR_OUT_OF_RANGE and turn a config typo into a fatal run.
-  it("rejects values above the ceiling and beyond safe-integer range", () => {
-    for (const bad of [String(MAX_QUERY_TIMEOUT_MS + 1), "6000000000000", "9".repeat(400)]) {
-      withTimeoutEnv(bad, () => assert.equal(queryTimeoutMs(), DEFAULT_QUERY_TIMEOUT_MS));
+  // Clamped, NOT dropped to the default: an operator raising the budget after
+  // watching an hour-long read must never silently get LESS than they asked for.
+  it("clamps an above-ceiling value to the ceiling rather than the default", () => {
+    for (const big of [String(MAX_QUERY_TIMEOUT_MS + 1), "7200000", "6000000000000"]) {
+      withTimeoutEnv(big, () => assert.equal(queryTimeoutMs(), MAX_QUERY_TIMEOUT_MS));
     }
+  });
+
+  it("falls back to the default when the value exceeds safe-integer range", () => {
+    withTimeoutEnv("9".repeat(400), () => assert.equal(queryTimeoutMs(), DEFAULT_QUERY_TIMEOUT_MS));
   });
 
   it("accepts a value exactly at the ceiling", () => {
     withTimeoutEnv(String(MAX_QUERY_TIMEOUT_MS), () => assert.equal(queryTimeoutMs(), MAX_QUERY_TIMEOUT_MS));
+  });
+
+  // The comment promises a rejection is LOUD. Without this, a silent fallback
+  // would keep the whole suite green while violating the documented contract.
+  it("warns on stderr naming the rejected value and the ceiling", () => {
+    const orig = console.error;
+    const lines: string[] = [];
+    console.error = (msg?: unknown) => { lines.push(String(msg)); };
+    try {
+      resetTimeoutWarningForTest();
+      withTimeoutEnv("10m", () => queryTimeoutMs());
+    } finally {
+      console.error = orig;
+    }
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /AGENTSVIEW_TIMEOUT_MS/);
+    assert.match(lines[0], /10m/);
+    assert.match(lines[0], new RegExp(String(MAX_QUERY_TIMEOUT_MS)));
+  });
+
+  // One bad value is resolved once per agentsview home; without the latch the
+  // operator greps their log and finds N copies of the same line.
+  it("warns only once even across repeated resolutions", () => {
+    const orig = console.error;
+    const lines: string[] = [];
+    console.error = (msg?: unknown) => { lines.push(String(msg)); };
+    try {
+      resetTimeoutWarningForTest();
+      withTimeoutEnv("abc", () => { queryTimeoutMs(); queryTimeoutMs(); queryTimeoutMs(); });
+    } finally {
+      console.error = orig;
+    }
+    assert.equal(lines.length, 1);
+  });
+
+  // Pins laziness. report.ts loads dotenv AFTER importing this module, so a
+  // module-level `const budget = queryTimeoutMs()` would read the env before
+  // .env is applied and silently ignore the operator's setting — with every
+  // other test in this file still passing.
+  it("resolves the env var at call time, not at import time", () => {
+    withTimeoutEnv("45000", () => assert.equal(queryTimeoutMs(), 45_000));
+    withTimeoutEnv("90000", () => assert.equal(queryTimeoutMs(), 90_000));
   });
 
   it("accepts a bare integer with surrounding whitespace", () => {
@@ -419,6 +467,25 @@ describe("query failure reporting", () => {
       writeExec(fakeBin, `#!/bin/sh\n[ "$1" = sync ] && exit 0\nsleep 5\necho '{"daily":[]}'\n`);
       withTimeoutEnv("250", () => {
         assert.throws(() => collectAgentsviewUsage(fakeBin, "20260501"), /query failed/);
+      });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  // The extra-homes path was switched off the same 180s literal, and its failure
+  // is escalated to fatal by collectExtraAgentsviewHomes — so it needs the same
+  // proof that the budget reaches its exec.
+  it("applies the resolved budget to collectAgentsviewAgentOnly too", { skip: process.platform === "win32" }, () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-home-"));
+    try {
+      const fakeBin = path.join(tmp, "agentsview");
+      writeExec(fakeBin, `#!/bin/sh\n[ "$1" = sync ] && exit 0\nsleep 5\necho '{"daily":[]}'\n`);
+      withTimeoutEnv("250", () => {
+        assert.throws(
+          () => collectAgentsviewAgentOnly(fakeBin, "20260501", "claude", {}),
+          /ETIMEDOUT after 250ms/,
+        );
       });
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });

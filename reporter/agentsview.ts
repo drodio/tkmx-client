@@ -162,19 +162,49 @@ export const DEFAULT_QUERY_TIMEOUT_MS = 600_000;
 // fatal run. An hour is far past any legitimate read.
 export const MAX_QUERY_TIMEOUT_MS = 3_600_000;
 
+// Warn at most once per process. Resolution stays lazy (dotenv populates
+// process.env after this module is imported, so the value must NOT be hoisted
+// to a module-level const), and queryTimeoutMs is re-evaluated per agentsview
+// home — without this, one bad value would print N identical lines into the
+// very log the operator is grepping.
+let warnedInvalidTimeout = false;
+
+function warnOnce(message: string): void {
+  if (warnedInvalidTimeout) return;
+  warnedInvalidTimeout = true;
+  console.error(message);
+}
+
 export function queryTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
   const raw = (env.AGENTSVIEW_TIMEOUT_MS || "").trim();
   if (!raw) return DEFAULT_QUERY_TIMEOUT_MS;
   const value = /^\d+$/.test(raw) ? Number(raw) : NaN;
-  if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_QUERY_TIMEOUT_MS) {
-    console.error(
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    warnOnce(
       `  ignoring invalid AGENTSVIEW_TIMEOUT_MS=${JSON.stringify(raw)} ` +
       `(expected a whole number of milliseconds in 1..${MAX_QUERY_TIMEOUT_MS}); ` +
       `using ${DEFAULT_QUERY_TIMEOUT_MS}`,
     );
     return DEFAULT_QUERY_TIMEOUT_MS;
   }
+  // Clamp rather than fall back: someone who sets 7200000 after watching an
+  // hour-long read wants MORE budget, and dropping them to the 600000 default
+  // would hand back LESS than they asked for — reintroducing the aborted cycle
+  // the flag exists to prevent. The typo case (6000000000000) clamps to the
+  // ceiling too, which is still a working backstop.
+  if (value > MAX_QUERY_TIMEOUT_MS) {
+    warnOnce(
+      `  clamping AGENTSVIEW_TIMEOUT_MS=${raw} to the ${MAX_QUERY_TIMEOUT_MS}ms ceiling`,
+    );
+    return MAX_QUERY_TIMEOUT_MS;
+  }
   return value;
+}
+
+// Test seam: the warn-once latch is process-global, so tests that assert the
+// warning fires need to reset it between cases.
+export function resetTimeoutWarningForTest(): void {
+  warnedInvalidTimeout = false;
 }
 
 export function toIsoDate(sinceStr: string): string {
@@ -236,7 +266,16 @@ function queryAgent(
 ): DailyUsage[] {
   const args = ["usage", "daily", "--json", "--breakdown", "--agent", agent, "--since", since];
   if (noSync) args.push("--no-sync");
-  const execOpts: Parameters<typeof execFileSync>[2] = { encoding: "utf-8", timeout: timeoutMs };
+  // SIGKILL for parity with syncAgentsview: spawnSync blocks until the child
+  // actually exits after the kill signal is sent, so a read that ignores or
+  // slow-handles SIGTERM would make this budget an unenforceable floor rather
+  // than a backstop — the lost-cycle failure again, now with a 10-minute head
+  // start. SIGKILL can't be caught. Node still sets code === "ETIMEDOUT".
+  const execOpts: Parameters<typeof execFileSync>[2] = {
+    encoding: "utf-8",
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+  };
   const env: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
   if (!noSync) env.WARP_DIR = WARP_SKIP_DIR;
   execOpts.env = env;
