@@ -1,9 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { resolveAgentsview } from "./agentsview";
 import { errMessage } from "./errors";
-
-const DEFAULT_TIMEOUT_MS = 180_000;  // 3 minutes — git integration can be slow
 const MAX_BUFFER_BYTES = 8 * 1024 * 1024;
+
+// Deliberately NOT the usage-read budget (DEFAULT_QUERY_TIMEOUT_MS, 10 min).
+// The tradeoff inverts here: a usage read is fatal, so waiting it out beats
+// losing the cycle — but session stats are best-effort (this returns null on
+// any failure and the report still posts), so a long stall buys nothing and
+// only delays the POST. 3 minutes keeps room for the git integration this
+// command does while bounding how long a wedged binary can hold up the run.
+const STATS_TIMEOUT_MS = 180_000;
 
 export interface SessionStatsBlob {
   schema_version: number;
@@ -31,7 +37,7 @@ export function collectSessionStats({ sinceDays = 28, timezone }: { sinceDays?: 
   const execOpts = {
     encoding: "utf-8" as const,
     maxBuffer: MAX_BUFFER_BYTES,
-    timeout: DEFAULT_TIMEOUT_MS,
+    timeout: STATS_TIMEOUT_MS,
   };
 
   let raw: string;
