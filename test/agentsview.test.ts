@@ -71,6 +71,41 @@ describe("parseAgentsviewOutput", () => {
     assert.equal(daily[0].modelBreakdowns[1].cost, 0.05);
   });
 
+  it("converts schema v3 microdollars to dollars", () => {
+    const parsed = {
+      daily: [{
+        date: "2026-07-29",
+        modelBreakdowns: [{
+          modelName: "claude-opus-4-6",
+          cost: { microdollars: 20_061_684 },
+        }],
+      }],
+    };
+
+    const daily = parseAgentsviewOutput(parsed, "claude");
+
+    assert.equal(daily[0].modelBreakdowns[0].cost, 20.061684);
+  });
+
+  it("rejects invalid schema v3 microdollar costs", () => {
+    for (const microdollars of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const parsed = {
+        daily: [{
+          date: "2026-07-29",
+          modelBreakdowns: [{
+            modelName: "claude-opus-4-6",
+            cost: { microdollars },
+          }],
+        }],
+      };
+
+      assert.throws(
+        () => parseAgentsviewOutput(parsed, "claude"),
+        /cost\.microdollars must be a non-negative safe integer/,
+      );
+    }
+  });
+
   it("returns [] for empty daily", () => {
     assert.deepEqual(parseAgentsviewOutput({ daily: [] }, "claude"), []);
   });
