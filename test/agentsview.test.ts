@@ -49,6 +49,13 @@ describe("parseAgentsviewOutput", () => {
       },
     ],
   });
+  const parseCost = (cost: number | { microdollars: number }) =>
+    parseAgentsviewOutput({
+      daily: [{
+        date: "2026-07-29",
+        modelBreakdowns: [{ modelName: "x", cost }],
+      }],
+    }, "claude")[0].modelBreakdowns[0].cost;
 
   it("tags each breakdown with the given source", () => {
     const daily = parseAgentsviewOutput(sample(), "claude");
@@ -66,41 +73,17 @@ describe("parseAgentsviewOutput", () => {
   });
 
   it("preserves the cost field untouched", () => {
-    const daily = parseAgentsviewOutput(sample(), "claude");
-    assert.equal(daily[0].modelBreakdowns[0].cost, 1.23);
-    assert.equal(daily[0].modelBreakdowns[1].cost, 0.05);
+    assert.equal(parseCost(1.23), 1.23);
   });
 
   it("converts schema v3 microdollars to dollars", () => {
-    const parsed = {
-      daily: [{
-        date: "2026-07-29",
-        modelBreakdowns: [{
-          modelName: "claude-opus-4-6",
-          cost: { microdollars: 20_061_684 },
-        }],
-      }],
-    };
-
-    const daily = parseAgentsviewOutput(parsed, "claude");
-
-    assert.equal(daily[0].modelBreakdowns[0].cost, 20.061684);
+    assert.equal(parseCost({ microdollars: 20_061_684 }), 20.061684);
   });
 
   it("rejects invalid schema v3 microdollar costs", () => {
     for (const microdollars of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
-      const parsed = {
-        daily: [{
-          date: "2026-07-29",
-          modelBreakdowns: [{
-            modelName: "claude-opus-4-6",
-            cost: { microdollars },
-          }],
-        }],
-      };
-
       assert.throws(
-        () => parseAgentsviewOutput(parsed, "claude"),
+        () => parseCost({ microdollars }),
         /cost\.microdollars must be a non-negative safe integer/,
       );
     }
