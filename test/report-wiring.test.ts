@@ -55,3 +55,41 @@ test("collectCursorStats uses statsSinceStr, not sinceStr", () => {
     "cursor_stats must not be windowed by REPORT_DAYS",
   );
 });
+
+// THE THREADING GUARD. EXTRA_CLAUDE_CONFIGS used to reach the token path only
+// (the collectExtraAgentsviewHomes map), so session_stats always described just
+// the default ~/.claude home while the operator had configured more. Tokens
+// counted the extra home; the subagent / plan-mode / tool-mix panels did not.
+//
+// This is the test that fails if the threading is reverted to token-path-only:
+// collectSessionStats must receive extraHomes derived from EXTRA_CLAUDE_CONFIGS.
+// The behavioral half — that a passed extra home is really queried and folded
+// in — lives in session-stats.test.ts, which a grep cannot cover.
+test("EXTRA_CLAUDE_CONFIGS reaches collectSessionStats, not just the token path", () => {
+  // It must still reach the token path (the pre-existing behaviour).
+  assert.match(
+    SRC,
+    /raw:\s*EXTRA_CLAUDE_CONFIGS/,
+    "EXTRA_CLAUDE_CONFIGS must still feed the usage/token collection",
+  );
+  // And it must ALSO reach the stats blob.
+  assert.match(
+    SRC,
+    /extraStatsHomes\(\s*EXTRA_CLAUDE_CONFIGS\s*\)/,
+    "extraStatsHomes must be derived from EXTRA_CLAUDE_CONFIGS",
+  );
+  assert.match(
+    SRC,
+    /collectSessionStats\(\s*\{[^}]*extraHomes:/,
+    "collectSessionStats must receive extraHomes, or every stats panel silently " +
+      "excludes the configured extra homes",
+  );
+  // The stats homes must be resolved through the SAME data-dir function the
+  // usage path syncs into — a second, independent path would drift.
+  assert.match(
+    SRC,
+    /function extraStatsHomes[\s\S]*?agentsviewDataDirFor\(/,
+    "extraStatsHomes must resolve dirs via agentsviewDataDirFor, the same " +
+      "function collectExtraAgentsviewHomes syncs into",
+  );
+});

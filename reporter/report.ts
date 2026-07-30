@@ -17,7 +17,7 @@ import { mergeDailyUsage, type DailyUsage } from "./merge";
 import { collectClaudeSkills } from "./skills";
 import { collectConfigStack } from "./config-stack";
 import { collectCursorStats, type CursorStats } from "./cursor";
-import { collectSessionStats } from "./session-stats";
+import { collectSessionStats, type ExtraStatsHome } from "./session-stats";
 import { loadState, saveState, computeTransitionMarkers } from "./reporting-state";
 import { STATS_WINDOW_DAYS, formatSinceStr } from "./window";
 import { errMessage } from "./errors";
@@ -99,6 +99,32 @@ function parseExtraConfigs(raw: string): string[] {
 function agentsviewDataDirFor(absConfigDir: string): string {
   const hash = crypto.createHash("sha256").update(absConfigDir).digest("hex").slice(0, 16);
   return path.join(os.homedir(), ".agentsview-tkmx", hash);
+}
+
+// The same extra homes the usage path collects, resolved to the isolated data
+// dirs collectExtraAgentsviewHomes already synced, for session_stats to RE-READ.
+//
+// Why this exists: EXTRA_CLAUDE_CONFIGS used to reach the token totals only.
+// collectSessionStats took no data-dir argument, so every stats panel
+// (subagents/session, plan mode, tool mix) silently described just the default
+// ~/.claude home while the operator had explicitly configured more. Tokens
+// counted the extra home; the panels did not — a blind spot that looked
+// authoritative. Deriving both from parseExtraConfigs + agentsviewDataDirFor
+// keeps them from drifting apart again.
+//
+// Only dirs that already exist are returned: they are created and synced
+// earlier in the same run by collectExtraAgentsviewHomes, so a missing one
+// means that home was not collected and there is nothing to read. Nothing here
+// syncs — see ExtraStatsHome.
+function extraStatsHomes(raw: string): ExtraStatsHome[] {
+  const homes: ExtraStatsHome[] = [];
+  for (const entry of parseExtraConfigs(raw)) {
+    const absEntry = path.resolve(entry);
+    const dataDir = agentsviewDataDirFor(absEntry);
+    if (!fs.existsSync(dataDir)) continue;
+    homes.push({ name: path.basename(absEntry) || absEntry, dataDir });
+  }
+  return homes;
 }
 
 // Collect usage from extra agentsview homes beyond the local scan — synced
@@ -370,7 +396,11 @@ async function main(): Promise<void> {
 
     if (currentState.session_stats_on) {
       console.log("  Collecting session stats (agentsview)...");
-      const ss = collectSessionStats({ sinceDays: STATS_WINDOW_DAYS });
+      const statsHomes = extraStatsHomes(EXTRA_CLAUDE_CONFIGS);
+      if (statsHomes.length > 0) {
+        console.log(`  Session stats: folding in ${statsHomes.length} extra Claude home(s)`);
+      }
+      const ss = collectSessionStats({ sinceDays: STATS_WINDOW_DAYS, extraHomes: statsHomes });
       if (ss) {
         body.session_stats = ss;
         console.log(`  Session stats: ${ss.totals?.sessions_all ?? "?"} sessions, schema v${ss.schema_version}`);

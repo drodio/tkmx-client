@@ -11,6 +11,190 @@ export interface SessionStatsBlob {
   [key: string]: unknown;
 }
 
+// One extra agentsview home to fold into the stats blob. `dataDir` is the
+// isolated AGENT_VIEWER_DATA_DIR the usage path already synced for this home
+// (see collectExtraAgentsviewHomes in report.ts) — this only ever RE-READS it.
+// It must never sync: agentsview's write path deadlocks under launchd (see
+// syncAgentsview in agentsview.ts) and session stats must not be able to hang
+// the report.
+export interface ExtraStatsHome {
+  name: string;
+  dataDir: string;
+}
+
+type Adoption = Record<string, unknown> & {
+  subagents_per_session?: number;
+  plan_mode_rate?: number;
+  distinct_skills?: number;
+};
+
+function asRecord(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+}
+
+function num(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+// Recover the session count agentsview divided by to produce its adoption
+// rates. The blob publishes RATES but not that denominator, and it is NOT
+// totals.sessions_all — agentsview narrows the set, measured at 14,908 against
+// a sessions_all of 15,492 — so the two must never be substituted.
+//
+// The identity that makes this recoverable: subagents_per_session is exactly
+// tool_mix.by_category.Task divided by that count. Verified against two
+// independent real windows on a 15k-session install:
+//   467 / 0.0313254628387443 = 14908.0   (28d)
+//    82 / 0.06628940986257073 = 1237.0   (1d)
+// both integral, and plan_mode_rate x N came out integral in both cases too
+// (14 and 8 sessions).
+//
+// Returns null when it cannot be recovered (no Task calls, or a zero rate).
+// The caller treats null as "do not merge adoption" rather than guessing.
+export function recoverSessionCount(blob: SessionStatsBlob | null): number | null {
+  const task = num(asRecord(asRecord(blob?.tool_mix)?.by_category)?.Task);
+  const rate = num((asRecord(blob?.adoption) as Adoption | null)?.subagents_per_session);
+  if (task === null || rate === null || task <= 0 || rate <= 0) return null;
+  const n = task / rate;
+  if (!Number.isFinite(n) || n <= 0) return null;
+  // ROUNDED, because this is a session COUNT. agentsview computed the rate as
+  // Task/N and serialized it as a float, so inverting it lands next to the
+  // integer rather than on it — 467/0.0313254628387443 comes back as
+  // 14907.999999999998. Carrying that noise into a sum of denominators is
+  // pointless precision about a quantity that cannot be fractional.
+  return Math.round(n);
+}
+
+function sumNumericInto(target: Record<string, unknown>, src: Record<string, unknown> | null): void {
+  if (!src) return;
+  for (const [k, v] of Object.entries(src)) {
+    const add = num(v);
+    if (add === null) continue;
+    const cur = num(target[k]);
+    target[k] = cur === null ? add : cur + add;
+  }
+}
+
+// Fold extra homes' blobs into the primary one.
+//
+// WHAT IS MERGED, and what deliberately is not. The server stores
+// session_stats WHOLESALE, so a field merged wrongly is not a smaller number —
+// it is a wrong one on a public profile. Same reasoning that makes a missing
+// usage home fatal in the token path.
+//
+//   • totals.*             summed (session and message counts are additive)
+//   • tool_mix.by_category
+//     and total_calls      summed
+//   • adoption rates       RECOMPUTED from recovered numerators and
+//                          denominators (see recoverSessionCount), never
+//                          averaged: the mean of two rates over different
+//                          session counts is a different quantity.
+//   • distinct_skills      MAX, not sum. The blob carries a count, not the
+//                          skill names, so a skill used in two homes cannot be
+//                          de-duplicated; max is an honest lower bound and
+//                          summing would inflate it.
+//   • everything else      the primary home's value, unchanged. Distributions,
+//                          archetypes, velocity and temporal shapes do not
+//                          publish the weighting they were built from, so
+//                          there is nothing to combine them on.
+//
+// If any contributing home's denominator cannot be recovered, adoption is left
+// as the primary's and `adoption_scope` records that, rather than presenting a
+// partial merge as a whole-machine figure.
+export function mergeSessionStats(
+  primary: SessionStatsBlob,
+  extras: SessionStatsBlob[],
+): SessionStatsBlob {
+  if (extras.length === 0) return primary;
+  const out: SessionStatsBlob = { ...primary, extra_homes_merged: extras.length };
+
+  const totals: Record<string, unknown> = { ...(asRecord(primary.totals) ?? {}) };
+  for (const e of extras) sumNumericInto(totals, asRecord(e.totals));
+  if (Object.keys(totals).length > 0) out.totals = totals as SessionStatsBlob["totals"];
+
+  const pmix = asRecord(primary.tool_mix);
+  if (pmix) {
+    const byCat: Record<string, unknown> = { ...(asRecord(pmix.by_category) ?? {}) };
+    let calls = num(pmix.total_calls) ?? 0;
+    for (const e of extras) {
+      const emix = asRecord(e.tool_mix);
+      if (!emix) continue;
+      sumNumericInto(byCat, asRecord(emix.by_category));
+      calls += num(emix.total_calls) ?? 0;
+    }
+    out.tool_mix = { ...pmix, by_category: byCat, total_calls: calls };
+  }
+
+  const padopt = asRecord(primary.adoption) as Adoption | null;
+  if (padopt) {
+    const contributors = [primary, ...extras.filter((e) => asRecord(e.adoption))];
+    const counts = contributors.map((b) => recoverSessionCount(b));
+    if (counts.every((n): n is number => n !== null)) {
+      let sessions = 0;
+      let subagents = 0;
+      let planSessions = 0;
+      let skills = 0;
+      contributors.forEach((b, i) => {
+        const n = counts[i] as number;
+        const a = asRecord(b.adoption) as Adoption;
+        sessions += n;
+        subagents += num(asRecord(asRecord(b.tool_mix)?.by_category)?.Task) ?? 0;
+        // plan_mode_rate x N is the session count behind the rate. Rounded
+        // because it is an integer count recovered through a float division.
+        planSessions += Math.round((num(a.plan_mode_rate) ?? 0) * n);
+        skills = Math.max(skills, num(a.distinct_skills) ?? 0);
+      });
+      out.adoption = {
+        ...padopt,
+        subagents_per_session: subagents / sessions,
+        plan_mode_rate: planSessions / sessions,
+        distinct_skills: skills,
+        adoption_scope: `merged:${contributors.length}`,
+      };
+    } else {
+      out.adoption = { ...padopt, adoption_scope: "primary-only" };
+    }
+  }
+
+  return out;
+}
+
+function runStats(
+  bin: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  label: string,
+): SessionStatsBlob | null {
+  let raw: string;
+  try {
+    raw = execFileSync(bin, args, {
+      encoding: "utf-8" as const,
+      maxBuffer: MAX_BUFFER_BYTES,
+      timeout: DEFAULT_TIMEOUT_MS,
+      env,
+    });
+  } catch (err) {
+    const stderr = (err as { stderr?: Buffer }).stderr?.toString().trim() || "";
+    const detail = stderr ? `: ${stderr}` : `: ${errMessage(err)}`;
+    console.error(`[session-stats] agentsview failed${label}${detail}`);
+    return null;
+  }
+
+  let parsed: SessionStatsBlob;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    console.error(`[session-stats] JSON parse failed${label}: ${errMessage(err)}`);
+    return null;
+  }
+
+  if (!parsed || typeof parsed !== "object" || typeof parsed.schema_version !== "number") {
+    console.error(`[session-stats] unexpected output shape${label}`);
+    return null;
+  }
+  return parsed;
+}
+
 // collectSessionStats runs `agentsview stats --format json` and returns
 // the parsed blob, or null on any error (missing binary, non-zero exit,
 // non-JSON output). Errors are logged but never propagate — the reporter
@@ -19,7 +203,31 @@ export interface SessionStatsBlob {
 // GH_TOKEN / GITHUB_TOKEN are passed through the child env (execFileSync
 // inherits process.env by default) rather than on argv, so the token
 // doesn't show up in `ps` output.
-export function collectSessionStats({ sinceDays = 28, timezone }: { sinceDays?: number; timezone?: string } = {}): SessionStatsBlob | null {
+//
+// `extraHomes` are the EXTRA_CLAUDE_CONFIGS / EXTRA_CODEX_CONFIGS homes the
+// usage path already collects. They used to reach the token totals ONLY: this
+// function took no data-dir argument, so it always read the default
+// ~/.agentsview DB and every stats panel silently excluded them. On a machine
+// whose agents run under per-account stores that is a structural blind spot —
+// the operator configures the home, its tokens ARE counted, and the subagent /
+// plan-mode / tool-mix panels quietly describe a subset of the machine while
+// looking authoritative.
+//
+// A home that fails to read is skipped and logged rather than fatal. That is
+// the opposite of the usage path (where a missing home aborts the run, because
+// a partial TOTAL posts as success) and it is deliberate: the worst case here
+// degrades to exactly the blob this function returned before the argument
+// existed, whereas aborting would throw away a whole report over a best-effort
+// field.
+export function collectSessionStats({
+  sinceDays = 28,
+  timezone,
+  extraHomes = [],
+}: {
+  sinceDays?: number;
+  timezone?: string;
+  extraHomes?: ExtraStatsHome[];
+} = {}): SessionStatsBlob | null {
   const bin = resolveAgentsview();
   if (!bin) {
     console.error("[session-stats] agentsview binary not found; skipping");
@@ -28,33 +236,20 @@ export function collectSessionStats({ sinceDays = 28, timezone }: { sinceDays?: 
   const args = ["stats", "--format", "json", "--since", `${sinceDays}d`];
   if (timezone) args.push("--timezone", timezone);
 
-  const execOpts = {
-    encoding: "utf-8" as const,
-    maxBuffer: MAX_BUFFER_BYTES,
-    timeout: DEFAULT_TIMEOUT_MS,
-  };
+  const primary = runStats(bin, args, process.env, "");
+  if (!primary) return null;
 
-  let raw: string;
-  try {
-    raw = execFileSync(bin, args, execOpts);
-  } catch (err) {
-    const stderr = (err as { stderr?: Buffer }).stderr?.toString().trim() || "";
-    const detail = stderr ? `: ${stderr}` : `: ${errMessage(err)}`;
-    console.error(`[session-stats] agentsview failed${detail}`);
-    return null;
+  const extras: SessionStatsBlob[] = [];
+  for (const home of extraHomes) {
+    const blob = runStats(
+      bin,
+      args,
+      { ...process.env, AGENT_VIEWER_DATA_DIR: home.dataDir },
+      ` (${home.name})`,
+    );
+    if (blob) extras.push(blob);
+    else console.error(`[session-stats] ${home.name}: skipped — the stats blob excludes it`);
   }
 
-  let parsed: SessionStatsBlob;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    console.error(`[session-stats] JSON parse failed: ${errMessage(err)}`);
-    return null;
-  }
-
-  if (!parsed || typeof parsed !== "object" || typeof parsed.schema_version !== "number") {
-    console.error("[session-stats] unexpected output shape");
-    return null;
-  }
-  return parsed;
+  return mergeSessionStats(primary, extras);
 }
