@@ -1,6 +1,36 @@
-# Review priority
+# Review instructions — tkmx-client
 
-**Stage:** Internal tool, single-digit operators, no external user surface. Iteration is rapid and the operator (also the engineer) can re-run anything that fails. Engineer-hours are the bottleneck. Matches `.knightwatch/product-context.md`.
+Reviewer-facing policy for this repo. Read it before any other input: it carries
+the operating point and the voice posture every finding must satisfy. The
+review-loop rules are org policy and are appended by each reviewer from its own
+copy, so they are not in this file.
+
+Both reviewers read this. knightwatch stages it from the base branch; roborev
+gets it inlined into `.roborev.toml` by `just sync-review-config` in the
+`claude-config` repo — so an edit here reaches roborev only after that sync runs.
+
+`standards.md` references below resolve inside the knightwatch bundle only.
+
+## Product context
+
+**Stage:** Internal tool. Small user base. Bias: simplicity over completeness.
+
+**Distribution model:** Internal only; no external customer deployments.
+
+**Architectural commitments:**
+- Keep the reporter cron self-contained and restartable; it runs unattended every 2 hours. Source is `reporter/report.ts`; installed units run the compiled `dist/reporter/report.js` (`reporter/report.js` is only a shim for pre-migration installs).
+- Fail-fast on config or credential errors — do not silently skip reporting cycles.
+
+**Known near-term migrations / roadmap items:**
+- None tracked here yet. Update when roadmap items emerge.
+
+**Review posture:** Architecture specialist should flag anything that adds external-facing surface area (this is an internal tool — treat new public endpoints, new auth surfaces, or new third-party integrations as notable).
+
+**Update cadence:** Quarterly or on major direction change.
+
+## Review priority
+
+**Stage:** Internal tool, single-digit operators, no external user surface. Iteration is rapid and the operator (also the engineer) can re-run anything that fails. Engineer-hours are the bottleneck. Matches § Product context above.
 
 **Cultural emphasis:** RAPID ITERATION + FAIL LOUDLY. The operator notices when the reporter cron silently skips a cycle — much faster than they notice when the code grows a defensive guard for a scenario that won't happen. Loud breaks > silent skips. The universal Broken-Glass posture (questions over prescriptions, cost-naming for additive remedies, declarative voice for high-confidence bugs only) lives in `standards.md` § Broken-Glass Test — apply it here, especially: scope-creep findings must name the cost ("adds complexity and makes PMF iteration harder").
 
