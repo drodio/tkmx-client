@@ -24,7 +24,7 @@ const SIZE = 256;
 const GITHUB_USERNAME = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
 
 export function resolveAvatarUrl(raw: string): string | null {
-  const value = (raw || "").trim();
+  const value = raw.trim();
   if (!value) return null;
 
   if (value.startsWith("gravatar:")) {
