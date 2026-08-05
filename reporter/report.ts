@@ -40,12 +40,14 @@ const USERNAME = process.env.TKMX_USERNAME || ENV_FILE.USERNAME;
 const SERVER_URL = process.env.SERVER_URL || "https://tokenmaxxing.odio.dev";
 const TEAM = process.env.TEAM || "default";
 const API_KEY = process.env.API_KEY;
-const TOOLS = process.env.TOOLS || "";
-const COMMUNITIES = process.env.COMMUNITIES || "";
-const PROJECTS = process.env.PROJECTS || "";
-const ABOUT = process.env.ABOUT || "";
-const HN_USERNAME = process.env.HN_USERNAME || "";
-const DEMO_VIDEO_URL = process.env.DEMO_VIDEO_URL || "";
+// Profile prose, read from THIS machine's .env. Left undefined when unset so
+// the POST body can omit the key entirely — see the note on ReportBody.
+const TOOLS = process.env.TOOLS;
+const COMMUNITIES = process.env.COMMUNITIES;
+const PROJECTS = process.env.PROJECTS;
+const ABOUT = process.env.ABOUT;
+const HN_USERNAME = process.env.HN_USERNAME;
+const DEMO_VIDEO_URL = process.env.DEMO_VIDEO_URL;
 const EXTRA_CLAUDE_CONFIGS = process.env.EXTRA_CLAUDE_CONFIGS || "";
 const EXTRA_CODEX_CONFIGS = process.env.EXTRA_CODEX_CONFIGS || "";
 
@@ -235,12 +237,16 @@ function postUsage(payload: string): Promise<ServerResponse> {
 interface ReportBody {
   username: string;
   team: string;
-  tools: string;
-  communities: string;
-  projects: string;
-  about: string;
-  hn_username: string;
-  demo_video_url: string;
+  // Profile prose is per-username, not per-machine, so every machine reporting
+  // for this user writes the same columns. It is optional here because an unset
+  // field must mean "leave whatever the server already holds" — the key is
+  // omitted rather than POSTed as "". See where it's assigned in main().
+  tools?: string;
+  communities?: string;
+  projects?: string;
+  about?: string;
+  hn_username?: string;
+  demo_video_url?: string;
   client_id: string;
   client_version: string;
   report_days: number;
@@ -337,17 +343,24 @@ async function main(): Promise<void> {
   const body: ReportBody = {
     username: USERNAME as string,
     team: TEAM,
-    tools: TOOLS,
-    communities: COMMUNITIES,
-    projects: PROJECTS,
-    about: ABOUT,
-    hn_username: HN_USERNAME,
-    demo_video_url: DEMO_VIDEO_URL,
     client_id: CLIENT_ID as string,
     client_version: CLIENT_VERSION,
     report_days: REPORT_DAYS,
     data: mergedDaily,
   };
+  // Only send profile prose this machine actually has a value for. These
+  // columns are keyed on username, so every machine you report from writes the
+  // same ones — and .env.example ships them empty. Sending "" therefore let a
+  // second machine (or a fresh checkout) silently blank a profile that was
+  // filled in from the first one, which is the opposite of the per-machine
+  // isolation CLIENT_ID gives body.data. Omitting the key leaves the server's
+  // value alone; edit the profile on the Builder Index to clear a field.
+  if (TOOLS) body.tools = TOOLS;
+  if (COMMUNITIES) body.communities = COMMUNITIES;
+  if (PROJECTS) body.projects = PROJECTS;
+  if (ABOUT) body.about = ABOUT;
+  if (HN_USERNAME) body.hn_username = HN_USERNAME;
+  if (DEMO_VIDEO_URL) body.demo_video_url = DEMO_VIDEO_URL;
   if (agentsviewVersion) body.agentsview_version = agentsviewVersion;
   const machineConfig = collectMachineConfig();
   if (machineConfig) body.machine_config = machineConfig;

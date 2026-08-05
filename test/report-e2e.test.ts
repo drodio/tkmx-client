@@ -472,6 +472,54 @@ for (const tc of [
   });
 }
 
+// Profile prose (tools/projects/communities/about/hn_username/demo_video_url)
+// is stored per username, not per CLIENT_ID, so every machine reporting for one
+// user writes the same columns. The reporter used to read each as
+// `process.env.X || ""` and put it in the body unconditionally, which meant a
+// machine whose .env had not been filled in — the state .env.example ships, all
+// six empty — POSTed empty strings and blanked a profile that had been set up
+// from the user's other machine. Last machine to report won. An unset field
+// must therefore be omitted so the server's value survives; a field this
+// machine does have must still be sent.
+test("unset profile fields are omitted from the POST body; set ones are still sent", async () => {
+  const ctx = await setupE2E({ dailyJson: '{"daily":[]}' });
+  // dotenv backfills anything unset from the repo's real .env, which would
+  // otherwise surface the developer's own TOOLS/ABOUT/... and make "unset"
+  // untestable. Write a .env holding only identity; the after() hook restores.
+  fs.writeFileSync(
+    ENV_PATH,
+    "USERNAME=e2euser\nAPI_KEY=e2ekey\nCLIENT_ID=e2e-client-id-fixed\n",
+  );
+  try {
+    const result = await runReporter({ ...ctx.baseEnv, TOOLS: "superpowers,paperclip" });
+    assert.equal(
+      result.status,
+      0,
+      `reporter exited non-zero.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    const captured = ctx.getCaptured();
+    assert.ok(captured, "server did not capture a POST body");
+
+    // The one field this machine has a value for still ships unchanged.
+    assert.equal(
+      captured.tools,
+      "superpowers,paperclip",
+      "a profile field this machine has set must still be reported",
+    );
+
+    // The rest must be absent rather than "" — an empty string overwrites the
+    // server's copy, which is the clobber this guards.
+    for (const field of ["projects", "communities", "about", "hn_username", "demo_video_url"]) {
+      assert.ok(
+        !(field in (captured as Record<string, unknown>)),
+        `unset ${field} must be omitted so the server keeps its value, but the body carried ${JSON.stringify((captured as Record<string, unknown>)[field])}`,
+      );
+    }
+  } finally {
+    ctx.cleanup();
+  }
+});
+
 test("legacy reporter/report.js compat shim forwards to the compiled reporter", async () => {
   // Pre-TypeScript installs wrote launchd/systemd units pointing at
   // <repo>/reporter/report.js. The migration replaced that file with a
