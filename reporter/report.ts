@@ -20,6 +20,7 @@ import { collectCursorStats, type CursorStats } from "./cursor";
 import { collectSessionStats } from "./session-stats";
 import { loadState, saveState, computeTransitionMarkers } from "./reporting-state";
 import { STATS_WINDOW_DAYS, formatSinceStr } from "./window";
+import { resolveAvatarUrl } from "./avatar";
 import { errMessage } from "./errors";
 
 // PROJECT_ROOT is the actual checked-out repo (not dist/). After build, this
@@ -46,11 +47,22 @@ const PROJECTS = process.env.PROJECTS || "";
 const ABOUT = process.env.ABOUT || "";
 const HN_USERNAME = process.env.HN_USERNAME || "";
 const DEMO_VIDEO_URL = process.env.DEMO_VIDEO_URL || "";
+const AVATAR = process.env.AVATAR || "";
 const EXTRA_CLAUDE_CONFIGS = process.env.EXTRA_CLAUDE_CONFIGS || "";
 const EXTRA_CODEX_CONFIGS = process.env.EXTRA_CODEX_CONFIGS || "";
 
 if (!USERNAME || !API_KEY) {
   console.error("USERNAME and API_KEY must be set in .env");
+  process.exit(1);
+}
+
+// Resolved at startup, next to the other config guards, so a typo'd AVATAR
+// fails the run with a clear message instead of quietly never appearing.
+let AVATAR_URL: string | null = null;
+try {
+  AVATAR_URL = resolveAvatarUrl(AVATAR);
+} catch (err) {
+  console.error(`AVATAR is not valid: ${errMessage(err)}`);
   process.exit(1);
 }
 
@@ -241,6 +253,9 @@ interface ReportBody {
   about: string;
   hn_username: string;
   demo_video_url: string;
+  // Omitted when AVATAR is unset, so a client that doesn't set one never
+  // clears an avatar configured elsewhere.
+  avatar_url?: string;
   client_id: string;
   client_version: string;
   report_days: number;
@@ -348,6 +363,7 @@ async function main(): Promise<void> {
     report_days: REPORT_DAYS,
     data: mergedDaily,
   };
+  if (AVATAR_URL) body.avatar_url = AVATAR_URL;
   if (agentsviewVersion) body.agentsview_version = agentsviewVersion;
   const machineConfig = collectMachineConfig();
   if (machineConfig) body.machine_config = machineConfig;
@@ -394,6 +410,7 @@ async function main(): Promise<void> {
   if (!COMMUNITIES) console.log(`  Set COMMUNITIES in .env — which dev communities you're part of`);
   if (!ABOUT) console.log(`  Set ABOUT in .env — a short description for your profile page`);
   if (!DEMO_VIDEO_URL) console.log(`  Set DEMO_VIDEO_URL in .env — a 3-min demo of your AI workflow`);
+  if (!AVATAR) console.log(`  Set AVATAR in .env — a picture for your profile (https://…, gravatar:you@example.com, or github:yourhandle)`);
 
   if (!HN_USERNAME) {
     console.log(`  Set HN_USERNAME in .env to appear on the Builder Index`);
