@@ -1,5 +1,76 @@
 # Reporter query timeout — agentsview reads under contention
 
+## Progress Update as of 2026-08-05 15:45 PDT
+*(Most recent updates at top)*
+
+### Summary of changes since last update
+
+Audited whether every agent/worktree on this machine reports. Worktrees are fine
+(3,939 Sparkle worktree sessions indexed in the last 7d, newest today — they all
+land in the main `~/.claude/projects`, which `Claude (local)` already collects).
+Found and fixed a separate, long-standing bug: the **Cursor window filter was a
+complete no-op**, so the profile has been reporting lifetime Cursor totals as if
+they were current-window activity.
+
+### Detail of changes made:
+
+- `reporter/cursor.ts`: the scored-commits query filtered `WHERE commitDate >= ?`
+  with an ISO `YYYY-MM-DD` string. `commitDate` is TEXT holding git's default
+  ctime rendering (`"Sat May 2 13:46:46 2026 -0700"`), so this was a lexical
+  compare of a weekday letter against a digit. Letters outrank digits in ASCII,
+  making the predicate TRUE for every non-NULL row. Proof on the real DB:
+  `commitDate >= '2099-12-31'` matched 703 rows. Switched to `scoredAt`, an
+  INTEGER epoch-ms column that is `NOT NULL` and already indexed
+  (`idx_scored_commits_scoredAt`).
+- Second half of the same bug: rows with a NULL `commitDate` were silently
+  dropped (`NULL >= 'x'` is NULL, not true). The real DB has 396 of them out of
+  1,099 — which is exactly why the reported figure was the oddly specific 703.
+  Filtering on `scoredAt` recovers them.
+- `test/cursor.test.ts`: new `describe` block with a fixture using the REAL ctime
+  format plus a NULL-commitDate row. The pre-existing fixture inserted
+  `commitDate = "2026-04-10"` (ISO), which compares correctly — that is why the
+  bug survived having tests. Three cases: excluded before-window, excluded for an
+  absurd 2099 window (the sharpest form), and a positive case so a fix that
+  excluded everything would not pass.
+
+Verified on the real Cursor DB — the window now actually moves, where all three
+of these previously returned 703:
+
+| since | before | after |
+|---|---|---|
+| 28d (`20260708`) | 703 | `{}` |
+| `20260101` | 703 | 1,088 |
+| `20250101` | 703 | 1,099 |
+
+Note the semantic shift: `scoredAt` is when Cursor scored the commit, not when it
+was authored. That is the better signal for a usage reporter, and `commitDate` is
+not reliably parseable in SQL given the mixed NULL/ctime contents.
+
+Also audited, no change needed: Codex reporting (6 days, 1,052 files touched in
+14d), OpenClaw (present but dormant — 0 files in 14d, nothing to report).
+
+### Beads activity:
+- None — `bd` resolves here but the workspace has 0 issues and is not this
+  project's tracker.
+
+### Potential concerns to address:
+
+- **`EXTRA_CLAUDE_CONFIGS` is a literal path list with no globbing, and Sparkle
+  mints a NEW account store per account switch.** `ef6ce18fe79bcf53` went stale
+  after 2026-07-27 (reports "0 days") when the account switched to
+  `602064ad688be368`, which was never added — so that store's usage is dropped.
+  Verified no session-id overlap between the stores and `~/.claude`, so listing
+  both is additive. The durable fix is auto-discovery of
+  `.../ai.sparkle.desktop/accounts/*`, mirroring how `OPENCLAW_SESSIONS_DIRS`
+  already defaults to discovering every Plow variant. Could not edit the live
+  `.env` (worktree guard blocks writes outside the agent worktree); handed the
+  user the one-line command.
+- **The iMac reports nothing and is unreachable from here** (no SSH hosts, no
+  Tailscale). Needs tkmx-client installed on that machine with its OWN
+  `CLIENT_ID` — the server PK is `username+date+model+client_id+source`, so
+  copying this Mac's `.env` wholesale would make the two machines overwrite each
+  other's rows.
+
 ## Progress Update as of 2026-07-24 18:07 PDT
 *(Most recent updates at top)*
 

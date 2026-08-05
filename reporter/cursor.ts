@@ -43,7 +43,12 @@ export function collectCursorStats(sinceDateStr: string): CursorStats | null {
   let DatabaseCtor: typeof Database;
   try { DatabaseCtor = require("better-sqlite3"); } catch { return null; }
 
-  const sinceDate = `${sinceDateStr.slice(0, 4)}-${sinceDateStr.slice(4, 6)}-${sinceDateStr.slice(6, 8)}`;
+  // Local-midnight epoch ms for the start of the window. Both queries below
+  // filter on INTEGER epoch-ms columns, so this is the only form we need.
+  const y = parseInt(sinceDateStr.slice(0, 4), 10);
+  const m = parseInt(sinceDateStr.slice(4, 6), 10) - 1;
+  const d = parseInt(sinceDateStr.slice(6, 8), 10);
+  const sinceMs = new Date(y, m, d).getTime();
 
   let db: Database.Database;
   try {
@@ -51,7 +56,23 @@ export function collectCursorStats(sinceDateStr: string): CursorStats | null {
   } catch { return null; }
 
   try {
-    // AI code attribution from scored commits
+    // AI code attribution from scored commits.
+    //
+    // Filter on scoredAt, NOT commitDate. commitDate is a TEXT column holding
+    // git's default ctime rendering ("Sat May 2 13:46:46 2026 -0700"), so
+    // comparing it to an ISO "YYYY-MM-DD" string is a lexical compare of a
+    // weekday letter against a digit. Every letter outranks every digit in
+    // ASCII, so `commitDate >= <any ISO date>` was true for every non-NULL
+    // row — the window excluded nothing, and the profile reported lifetime
+    // totals as current activity. It also silently dropped rows with a NULL
+    // commitDate (NULL >= 'x' is NULL, not true), which real DBs contain in
+    // quantity. scoredAt is INTEGER epoch ms, declared NOT NULL, and already
+    // indexed (idx_scored_commits_scoredAt), so it fixes both halves at once.
+    //
+    // Semantics shift slightly: scoredAt is when Cursor scored the commit
+    // rather than when it was authored. That is the better signal for a usage
+    // reporter anyway (it marks when the AI work happened), and commitDate is
+    // not reliably parseable in SQL given the mixed NULL/ctime contents.
     const commitStats = db.prepare(`
       SELECT
         COUNT(*) as commits,
@@ -62,15 +83,10 @@ export function collectCursorStats(sinceDateStr: string): CursorStats | null {
         COALESCE(SUM(humanLinesAdded), 0) as human_lines_added,
         COALESCE(SUM(humanLinesDeleted), 0) as human_lines_deleted
       FROM scored_commits
-      WHERE commitDate >= ?
-    `).get(sinceDate) as CommitStats;
+      WHERE scoredAt >= ?
+    `).get(sinceMs) as CommitStats;
 
     // Conversation count by model and mode
-    const y = parseInt(sinceDateStr.slice(0, 4), 10);
-    const m = parseInt(sinceDateStr.slice(4, 6), 10) - 1;
-    const d = parseInt(sinceDateStr.slice(6, 8), 10);
-    const sinceMs = new Date(y, m, d).getTime();
-
     const convRows = db.prepare(`
       SELECT model, mode, COUNT(*) as count
       FROM conversation_summaries
