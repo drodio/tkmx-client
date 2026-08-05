@@ -49,6 +49,28 @@ not reliably parseable in SQL given the mixed NULL/ctime contents.
 Also audited, no change needed: Codex reporting (6 days, 1,052 files touched in
 14d), OpenClaw (present but dormant — 0 files in 14d, nothing to report).
 
+### roborev round on 572bfaa (job 59099) — two findings, both addressed
+
+- **Medium — the cited verification was non-discriminating.** "The 28d window now
+  returns `{}`" is also what a units mismatch produces: if `scoredAt` were epoch
+  seconds, `scoredAt >= sinceMs` would compare ~1.7e9 against ~1.8e12 and match
+  nothing for any window, forever, logging "Cursor: 0 scored commits" with no
+  error — the mirror image of the bug being fixed, and equally silent.
+  Ran the discriminating query: `MIN(scoredAt)=1766014757322`,
+  `MAX(scoredAt)=1777820363850`, both ~1.7e12, i.e. **milliseconds**. Read as
+  seconds, MAX would land in the year 58332. So the fix is correct as shipped.
+  Note the differential already ruled this out — `20250101` returned 1,099 rows,
+  which under a seconds interpretation would have been 0 — but that was never
+  stated as a discriminating test, which was the fair part of the finding.
+  Pinned it durably with a new `scoredAt units` suite instead of leaving it as an
+  undocumented assumption.
+- **Low — ~45 duplicated lines between the two suites.** Valid. Hoisted a single
+  `makeCursorHome(commits, conversations)` helper plus one `SCHEMA` const; both
+  suites now call it. Net-negative LOC and one copy of the DDL.
+- Mutation-checked the new assertions rather than trusting a green run: patching
+  the query to `Math.floor(sinceMs/1000)` (a units regression) fails 5 tests,
+  including both new units tests. The tests can actually fail.
+
 ### Beads activity:
 - None — `bd` resolves here but the workspace has 0 issues and is not this
   project's tracker.
