@@ -4,6 +4,10 @@ import * as path from "node:path";
 import { errMessage } from "./errors";
 import type { DailyUsage, ModelBreakdown } from "./usage";
 
+interface RawMoney {
+  microdollars: number;
+}
+
 // Raw breakdown shape from `agentsview usage daily --json`. Token counters
 // may be omitted (agentsview elides zeros) and totalTokens is always
 // computed downstream — this is the wire shape, not the internal one.
@@ -14,7 +18,7 @@ interface RawModelBreakdown {
   outputTokens?: number;
   cacheCreationTokens?: number;
   cacheReadTokens?: number;
-  cost?: number;
+  cost?: number | RawMoney;
   source?: string;
 }
 
@@ -142,6 +146,15 @@ export const LOCAL_AGENTSVIEW_AGENTS = ["claude", "codex", "pi", "opencode"] as 
 export type AgentsviewAgent = (typeof LOCAL_AGENTSVIEW_AGENTS)[number];
 export type AgentsviewUsageByAgent = Record<AgentsviewAgent, DailyUsage[]>;
 
+function costDollars(cost: RawModelBreakdown["cost"]): number | undefined {
+  if (cost === undefined) return undefined;
+  if (typeof cost === "number") return cost;
+  if (!Number.isSafeInteger(cost.microdollars) || cost.microdollars < 0) {
+    throw new Error("agentsview cost.microdollars must be a non-negative safe integer");
+  }
+  return cost.microdollars / 1_000_000;
+}
+
 // Convert `agentsview usage daily --json` output into the normalized
 // internal shape. Defaults missing per-token-type counters to 0 and
 // computes totalTokens once, so downstream code (merge.ts / report.ts)
@@ -161,7 +174,7 @@ export function parseAgentsviewOutput(parsed: AgentsviewJson, source: string): D
         cacheCreationTokens,
         cacheReadTokens,
         totalTokens: inputTokens + outputTokens + cacheCreationTokens + cacheReadTokens,
-        cost: m.cost,
+        cost: costDollars(m.cost),
         source,
       };
     });
