@@ -1,0 +1,44 @@
+name: CI
+
+# Runs on every PR so a pull request can never again sit unverified. Also runs
+# on pushes to main so the default branch keeps a green baseline to compare
+# a PR against.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push to a PR makes the in-flight run pointless — cancel it rather than
+# queueing behind it.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: typecheck + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 22 is the active LTS and is what better-sqlite3 ^11 ships prebuilds
+          # for; newer majors can force a source build of the native addon.
+          node-version: '22'
+          cache: npm
+
+      # Mirrors `just test`: a failed install is a setup failure, not a test
+      # result, so it gets its own exit code and its own step. Without this the
+      # log reads as "tests failed" when nothing was ever run.
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
