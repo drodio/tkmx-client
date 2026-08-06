@@ -49,6 +49,28 @@ not reliably parseable in SQL given the mixed NULL/ctime contents.
 Also audited, no change needed: Codex reporting (6 days, 1,052 files touched in
 14d), OpenClaw (present but dormant — 0 files in 14d, nothing to report).
 
+### .env backups were one `git add -A` from leaking a live API key
+
+`.gitignore` covered `.env` but not its backups. Two sat untracked in the
+worktree — `.env.bak-20260724` and `.env.bak-concierge-20260806-021701`, the
+latter written by tooling, not by hand — and both carry `API_KEY` in plaintext.
+Nothing had leaked (`.env.example` is the only tracked `.env*`, holding the
+placeholder, and no 40+ hex key appears anywhere in history), but the exposure
+was one careless `git add -A` away, and the filenames are generated with
+timestamps so enumerating them is futile. Left the backup files themselves in
+place — they are the user's data, not mine to delete.
+
+roborev (job 59583) then caught that my first attempt — `.env.bak*`,
+`.env.*.bak`, `.env.backup*` — was still a fixed list, just a wider one, missing
+`.env~`, `.env.old`, `.env.save`, `.env.orig`. Since the writers live outside
+this repo, the naming surface cannot be enumerated from in here, so a prefix
+match is the only form that closes rather than chases. Collapsed to `.env*` plus
+`!.env.example`: four ignore lines become two, and every sibling form is covered.
+Verified all ten candidate names ignored while `.env.example` stays tracked.
+Deliberately swallows `.envrc` as well — direnv configs commonly hold secrets, and
+silently untracking one is far cheaper than committing it; anything that
+genuinely belongs in git can be added with `git add -f`.
+
 ### roborev round on 572bfaa (job 59099) — two findings, both addressed
 
 - **Medium — the cited verification was non-discriminating.** "The 28d window now
