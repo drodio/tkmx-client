@@ -9,10 +9,13 @@ on:
     branches: [main]
 
 # A new push to a PR makes the in-flight run pointless — cancel it rather than
-# queueing behind it.
+# queueing behind it. Cancellation is scoped to PRs on purpose: main runs exist
+# to give the default branch a green baseline, and two merges landing inside one
+# run's duration would otherwise leave the earlier commit marked cancelled
+# rather than green.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -32,9 +35,13 @@ jobs:
           cache: npm
 
       # Mirrors `just test`: a failed install is a setup failure, not a test
-      # result, so it gets its own exit code and its own step. Without this the
-      # log reads as "tests failed" when nothing was ever run.
-      - name: Install dependencies
+      # result, so it gets its own step. Without this the log reads as "tests
+      # failed" when nothing was ever run.
+      # Named for what it actually does: npm ci also runs the `prepare` script
+      # (npm run build → tsc), so a TypeScript compile error reddens THIS step
+      # and the Typecheck step below never runs. --ignore-scripts is not an
+      # option — better-sqlite3 needs its install script to fetch the prebuild.
+      - name: Install dependencies (npm ci also runs prepare → tsc build)
         run: npm ci --no-audit --no-fund
 
       - name: Typecheck
