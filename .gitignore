@@ -1,5 +1,14 @@
 node_modules/
-.env
+# Ignore every .env sibling and un-ignore only the tracked template. The files
+# at risk (.env.bak-20260724, .env.bak-concierge-20260806-021701, editor .env~,
+# sed -i.bak output) all carry API_KEY in plaintext and are written by tooling
+# OUTSIDE this repo, so their naming surface cannot be enumerated from in here —
+# a prefix match is the only form that closes rather than chases.
+# Deliberately swallows .envrc too: direnv configs commonly hold secrets, and
+# silently untracking one is a far cheaper mistake than committing it. Anything
+# here that genuinely belongs in git needs an explicit `git add -f`.
+.env*
+!.env.example
 .machine_config_hash
 .reporting-state.json
 dist/
