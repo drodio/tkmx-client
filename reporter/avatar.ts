@@ -61,5 +61,10 @@ export function resolveAvatarUrl(raw: string): string | null {
   if (url.protocol !== "https:") {
     throw new Error(`avatar URL must be https, got "${url.protocol}//"`);
   }
+  // This URL is posted off the machine and ends up in an attribute on a public
+  // page, so it must not carry credentials.
+  if (url.username || url.password) {
+    throw new Error("avatar URL must not embed credentials (user:password@)");
+  }
   return url.toString();
 }
