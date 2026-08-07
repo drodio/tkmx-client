@@ -293,7 +293,17 @@ for (const tc of [
     env: { TOOLS: "   " },  // whitespace-only counts as unconfigured
     present: {},
     absent: PROFILE_PROSE_KEYS,
-    stdoutHas: [MULTI_MACHINE_HINT],
+    // Nothing is configured, so every nudge the loop emits fires here. Pinning
+    // the strings is what stops the loop being deleted, or losing its
+    // `!f.value` guard and nagging about configured fields, unnoticed.
+    stdoutHas: [
+      "Set TOOLS in .env",
+      "Set PROJECTS in .env",
+      "Set COMMUNITIES in .env",
+      "Set ABOUT in .env",
+      "Set DEMO_VIDEO_URL in .env",
+      MULTI_MACHINE_HINT,
+    ],
   },
   {
     // hn_username was left out of the hint's condition twice, so a machine with
@@ -308,6 +318,10 @@ for (const tc of [
     present: { tools: "Sparkle.ai", about: "padded on both sides" },
     absent: ["hn_username"],
     stdoutHas: ["Set HN_USERNAME in .env", MULTI_MACHINE_HINT],
+    // The other half of the nudge contract: a configured field stops nagging.
+    // Without this the loop can lose its `!f.value` guard and nag forever
+    // about fields you've already set, with the suite still green.
+    stdoutLacks: ["Set TOOLS in .env"],
   },
 ]) {
   test(`profile prose payload — ${tc.name}`, async () => {
@@ -336,6 +350,9 @@ for (const tc of [
       // trusting a read of the code.
       for (const line of tc.stdoutHas) {
         assert.ok(result.stdout.includes(line), `stdout should contain "${line}".\nGot:\n${result.stdout}`);
+      }
+      for (const line of tc.stdoutLacks ?? []) {
+        assert.ok(!result.stdout.includes(line), `stdout should NOT contain "${line}".\nGot:\n${result.stdout}`);
       }
       // Sanity: an otherwise-normal report, so this can't pass because the
       // reporter bailed out before building a body.
