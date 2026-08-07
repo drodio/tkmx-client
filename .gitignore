@@ -1,5 +1,10 @@
 node_modules/
 .env
+# .env backups and per-machine variants (.env.bak-*, .env.local, ...) carry the
+# same USERNAME/API_KEY as .env itself. Only .env was ignored, so a backup made
+# before editing sat untracked-but-committable, one `git add .` from a public repo.
+.env.*
+!.env.example
 .machine_config_hash
 .reporting-state.json
 dist/
