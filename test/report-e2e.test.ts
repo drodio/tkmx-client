@@ -339,12 +339,10 @@ test("a malformed AVATAR never echoes its value into the logs", async () => {
   try {
     const result = await runReporter({ ...ctx.baseEnv, AVATAR: "https://user:hunter2@" });
     assert.notEqual(result.status, 0, "reporter must exit non-zero on a malformed AVATAR");
-    for (const secret of ["hunter2", "user:hunter2"]) {
-      assert.ok(
-        !result.stderr.includes(secret) && !result.stdout.includes(secret),
-        `the AVATAR value leaked into the logs — found "${secret}" in:\n${result.stderr}${result.stdout}`,
-      );
-    }
+    assert.ok(
+      !result.stderr.includes("hunter2") && !result.stdout.includes("hunter2"),
+      `the AVATAR value leaked into the logs:\n${result.stderr}${result.stdout}`,
+    );
     assert.match(result.stderr, /AVATAR is not a URL/i, `expected a generic reason, got:\n${result.stderr}`);
   } finally {
     ctx.cleanup();

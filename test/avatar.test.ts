@@ -57,6 +57,27 @@ for (const [name, input, reason] of [
   });
 }
 
+// Every rejection path, not just the URL one. The rows above match on
+// /gravatar:/ and /github:/, which the old `got "${email}"` messages satisfied
+// too — so without these, restoring an interpolation leaves the suite green.
+// A credential-bearing value reaches each of these branches and the error is
+// written to an unattended log by the caller.
+for (const [name, input] of [
+  ["a URL that fails to parse", "https://user:hunter2@"],
+  ["a gravatar: value that isn't an email", "gravatar:https://u:hunter2@h"],
+  ["a github: value that isn't a username", "github:u:hunter2@h"],
+] as const) {
+  test(`never echoes the value back — ${name}`, () => {
+    assert.throws(() => resolveAvatarUrl(input), (err: Error) => {
+      assert.ok(
+        !err.message.includes("hunter2"),
+        `error echoed the operator's value: ${err.message}`,
+      );
+      return true;
+    });
+  });
+}
+
 test("the not-a-URL error names all three accepted forms", () => {
   // An alternation would pass on any one of them — including the unrelated
   // "must be https" text — so require each form individually.
