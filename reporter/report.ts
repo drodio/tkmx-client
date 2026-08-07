@@ -349,16 +349,19 @@ async function main(): Promise<void> {
     data: mergedDaily,
   };
 
-  // Profile prose comes from THIS machine's .env, but the profile it lands on
-  // is shared by every machine reporting under this username, and the server
-  // keeps the last value it was sent. Posting "" for a field this machine
-  // simply hasn't configured would therefore blank a profile that was filled
-  // in elsewhere — the reporter is built to run on all your machines, so the
-  // last one to report wins. Leaving the key out instead means "no opinion",
-  // and the server keeps whatever it already holds.
+  // Profile prose comes from THIS machine's .env, but the profile it lands on is
+  // shared by every machine reporting under this username. Sending "" for a field
+  // nobody on this machine has configured is at best meaningless and at worst
+  // destructive, so send nothing at all: an omitted key expresses no opinion and
+  // leaves whatever the server already holds.
+  //
+  // What the server does with a value that IS sent varies by field and isn't
+  // knowable from here — `tools` is known to merge rather than replace, and the
+  // scalar fields are unverified — which is exactly why this side declines to
+  // guess. Omitting is the only behaviour that's correct under either semantics.
   //
   // The upshot for a second machine: leave these blank in its .env and it will
-  // report your usage without touching your profile.
+  // report your usage without expressing an opinion about your profile.
   if (TOOLS) body.tools = TOOLS;
   if (COMMUNITIES) body.communities = COMMUNITIES;
   if (PROJECTS) body.projects = PROJECTS;

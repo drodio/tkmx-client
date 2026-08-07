@@ -274,72 +274,62 @@ test(".env USERNAME beats inherited OS USERNAME", async () => {
   }
 });
 
-// The profile is shared by every machine reporting under one username, and the
-// server keeps the last value it was sent. These two tests pin the rule that
-// makes multi-machine reporting safe: a field this machine hasn't configured is
-// left OUT of the POST (no opinion), and a field it has configured is still
-// sent. Both write a controlled .env first — dotenv fills unset vars from the
-// repo's real .env, which on a developer machine carries their own profile and
-// would otherwise mask an "unconfigured machine" regression.
+// The profile is shared by every machine reporting under one username, so a
+// field this machine hasn't configured must be left OUT of the POST (expressing
+// no opinion) while a field it has configured is still sent. Each row writes a
+// controlled .env first — dotenv fills unset vars from the repo's real .env,
+// which on a developer machine carries their own profile and would otherwise
+// mask an "unconfigured machine" regression.
 const PROFILE_PROSE_KEYS = ["tools", "communities", "projects", "about", "hn_username", "demo_video_url"];
 const MINIMAL_ENV = "USERNAME=e2euser\nAPI_KEY=e2ekey\nCLIENT_ID=e2e-client-id-fixed\n";
 
-test("profile prose keys are omitted when this machine hasn't configured them", async () => {
-  // Regression: these were posted unconditionally as `TOOLS || ""`, so a second
-  // machine with a blank .env — exactly what .env.example ships — silently
-  // blanked a profile filled in on the first machine.
-  const ctx = await setupE2E({ dailyJson: '{"daily":[]}' });
-  fs.writeFileSync(ENV_PATH, MINIMAL_ENV);
-  try {
-    const result = await runReporter({ ...ctx.baseEnv, TOOLS: "   " });
-    assert.equal(
-      result.status,
-      0,
-      `reporter exited non-zero.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
-    );
-    const captured = ctx.getCaptured();
-    assert.ok(captured, "server did not capture a POST body");
-    for (const key of PROFILE_PROSE_KEYS) {
-      assert.ok(
-        !(key in captured),
-        `unconfigured "${key}" must be absent from the POST, not sent as "" — sending it overwrites the value another machine set. Got: ${JSON.stringify(captured[key])}`,
+for (const tc of [
+  {
+    // Regression: these were posted unconditionally as `TOOLS || ""`, so a
+    // machine with a blank .env — exactly what .env.example ships — sent six
+    // empty strings over a profile configured elsewhere.
+    name: "omits every key this machine hasn't configured",
+    env: { TOOLS: "   " },  // whitespace-only counts as unconfigured
+    present: {},
+    absent: PROFILE_PROSE_KEYS,
+  },
+  {
+    name: "sends what is configured, trimmed, and still omits the rest",
+    env: { TOOLS: "Sparkle.ai,Zight", ABOUT: "  padded on both sides  " },
+    present: { tools: "Sparkle.ai,Zight", about: "padded on both sides" },
+    absent: ["projects", "communities", "hn_username", "demo_video_url"],
+  },
+]) {
+  test(`profile prose payload — ${tc.name}`, async () => {
+    const ctx = await setupE2E({ dailyJson: '{"daily":[]}' });
+    fs.writeFileSync(ENV_PATH, MINIMAL_ENV);
+    try {
+      const result = await runReporter({ ...ctx.baseEnv, ...tc.env });
+      assert.equal(
+        result.status,
+        0,
+        `reporter exited non-zero.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
       );
+      const captured = ctx.getCaptured();
+      assert.ok(captured, "server did not capture a POST body");
+      for (const [key, value] of Object.entries(tc.present)) {
+        assert.equal(captured[key], value, `configured "${key}" must reach the server`);
+      }
+      for (const key of tc.absent) {
+        assert.ok(
+          !(key in captured),
+          `unconfigured "${key}" must be absent, not sent as "" — an empty value expresses an opinion this machine doesn't have. Got: ${JSON.stringify(captured[key])}`,
+        );
+      }
+      // Sanity: an otherwise-normal report, so this can't pass because the
+      // reporter bailed out before building a body.
+      assert.equal(captured.username, "e2euser");
+      assert.deepEqual(captured.data, []);
+    } finally {
+      ctx.cleanup();
     }
-    // Sanity: the run is otherwise a normal report, so this isn't passing
-    // because the reporter bailed out before building a body.
-    assert.equal(captured.username, "e2euser");
-    assert.deepEqual(captured.data, []);
-  } finally {
-    ctx.cleanup();
-  }
-});
-
-test("configured profile prose is still sent, trimmed", async () => {
-  const ctx = await setupE2E({ dailyJson: '{"daily":[]}' });
-  fs.writeFileSync(ENV_PATH, MINIMAL_ENV);
-  try {
-    const result = await runReporter({
-      ...ctx.baseEnv,
-      TOOLS: "Sparkle.ai,Zight",
-      ABOUT: "  padded on both sides  ",
-    });
-    assert.equal(
-      result.status,
-      0,
-      `reporter exited non-zero.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
-    );
-    const captured = ctx.getCaptured();
-    assert.ok(captured, "server did not capture a POST body");
-    assert.equal(captured.tools, "Sparkle.ai,Zight", "a configured field must still reach the server");
-    assert.equal(captured.about, "padded on both sides", "a configured field is trimmed before sending");
-    // The fields this machine left blank stay absent in the same run.
-    for (const key of ["projects", "communities", "hn_username", "demo_video_url"]) {
-      assert.ok(!(key in captured), `"${key}" was left blank and must stay absent`);
-    }
-  } finally {
-    ctx.cleanup();
-  }
-});
+  });
+}
 
 test("inactive day (no usage rows) still posts and still refreshes session_stats", async () => {
   // Regression: the reporter used to early-return when mergedDaily was
