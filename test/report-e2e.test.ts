@@ -326,10 +326,28 @@ for (const tc of [
       TOOLS: "Sparkle.ai", PROJECTS: "tkmx", COMMUNITIES: "hn",
       ABOUT: "about me", DEMO_VIDEO_URL: "https://youtu.be/x",
     },
-    present: { tools: "Sparkle.ai", projects: "tkmx" },
+    // Every configured field is pinned, with a distinct value, on both sides:
+    // the payload proves each key carries ITS OWN env var's value, and the
+    // absent nudge proves the same row's `env` name is the one being read.
+    // Between them a mis-paired descriptor ({ key: "about", env:
+    // "DEMO_VIDEO_URL" }) or a typo'd env name ("COMUNITIES") fails here —
+    // neither is something the types can catch.
+    present: {
+      tools: "Sparkle.ai",
+      projects: "tkmx",
+      communities: "hn",
+      about: "about me",
+      demo_video_url: "https://youtu.be/x",
+    },
     absent: ["hn_username"],
     stdoutHas: ["Set HN_USERNAME in .env", MULTI_MACHINE_HINT],
-    stdoutLacks: ["Set TOOLS in .env", "Set PROJECTS in .env", "Set ABOUT in .env"],
+    stdoutLacks: [
+      "Set TOOLS in .env",
+      "Set PROJECTS in .env",
+      "Set COMMUNITIES in .env",
+      "Set ABOUT in .env",
+      "Set DEMO_VIDEO_URL in .env",
+    ],
   },
 ]) {
   test(`profile prose payload — ${tc.name}`, async () => {
