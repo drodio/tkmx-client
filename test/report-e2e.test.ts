@@ -315,15 +315,25 @@ test("an unset AVATAR is left out of the POST entirely", async () => {
   }
 });
 
-test("a malformed AVATAR aborts the run with no POST", async () => {
-  // Fail-loud: a typo'd avatar is a config error the operator can fix, and a
-  // silent skip would leave them wondering why the picture never appeared.
+test("a malformed AVATAR warns loudly but still reports usage", async () => {
+  // The usage report is the point of the run and is perfectly valid without a
+  // picture, so a bad avatar must not cost a whole cycle of token data. Loud on
+  // stderr, dropped from the payload, run still succeeds.
   const ctx = await setupE2E({ dailyJson: '{"daily":[]}' });
   try {
     const result = await runReporter({ ...ctx.baseEnv, AVATAR: "http://example.com/me.png" });
-    assert.notEqual(result.status, 0, "reporter must exit non-zero on a malformed AVATAR");
-    assert.equal(ctx.getCaptured(), null, "no POST may be sent when AVATAR is malformed");
-    assert.match(result.stderr, /AVATAR is not valid/i, `expected a clear error, got:\n${result.stderr}`);
+    assert.equal(
+      result.status,
+      0,
+      `a bad avatar must not fail the run.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    assert.match(result.stderr, /Ignoring AVATAR/i, `expected a loud warning, got:\n${result.stderr}`);
+    const captured = ctx.getCaptured();
+    assert.ok(captured, "usage must still be posted when AVATAR is malformed");
+    assert.ok(
+      !("avatar_url" in captured),
+      `a rejected avatar must be dropped, not posted: ${JSON.stringify(captured.avatar_url)}`,
+    );
   } finally {
     ctx.cleanup();
   }

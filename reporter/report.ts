@@ -56,14 +56,18 @@ if (!USERNAME || !API_KEY) {
   process.exit(1);
 }
 
-// Resolved at startup, next to the other config guards, so a typo'd AVATAR
-// fails the run with a clear message instead of quietly never appearing.
+// Resolved at startup so a typo surfaces on the first run rather than silently
+// never appearing. Deliberately NOT fatal, unlike the USERNAME/API_KEY guard
+// above: without those there is nothing to report, whereas a bad avatar leaves
+// a perfectly good usage report. Aborting would cost the operator a whole
+// 2-hour cycle of token data over a cosmetic field — that is the "silently
+// skipped reporting cycle" this repo's review policy warns against, not an
+// example of failing fast. Loud on stderr, then carry on without a picture.
 let AVATAR_URL: string | null = null;
 try {
   AVATAR_URL = resolveAvatarUrl(AVATAR);
 } catch (err) {
-  console.error(`AVATAR is not valid: ${errMessage(err)}`);
-  process.exit(1);
+  console.error(`Ignoring AVATAR — ${errMessage(err)}`);
 }
 
 function readMachineId(): string | null {
@@ -410,7 +414,7 @@ async function main(): Promise<void> {
   if (!COMMUNITIES) console.log(`  Set COMMUNITIES in .env — which dev communities you're part of`);
   if (!ABOUT) console.log(`  Set ABOUT in .env — a short description for your profile page`);
   if (!DEMO_VIDEO_URL) console.log(`  Set DEMO_VIDEO_URL in .env — a 3-min demo of your AI workflow`);
-  if (!AVATAR) console.log(`  Set AVATAR in .env — a picture for your profile (https://…, gravatar:you@example.com, or github:yourhandle)`);
+  if (!AVATAR) console.log(`  Set AVATAR in .env — a picture for your profile (https://…, gravatar:you@example.com, or github:yourhandle) — not active yet, needs server support`);
 
   if (!HN_USERNAME) {
     console.log(`  Set HN_USERNAME in .env to appear on the Builder Index`);
