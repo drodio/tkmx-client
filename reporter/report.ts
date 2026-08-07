@@ -59,19 +59,12 @@ if (!USERNAME || !API_KEY) {
   process.exit(1);
 }
 
-// Resolved at startup so a typo surfaces on the first run rather than silently
-// never appearing. Deliberately NOT fatal, unlike the USERNAME/API_KEY guard
-// above: without those there is nothing to report, whereas a bad avatar leaves
-// a perfectly good usage report. Aborting would cost the operator a whole
-// 2-hour cycle of token data over a cosmetic field — that is the "silently
-// skipped reporting cycle" this repo's review policy warns against, not an
-// example of failing fast. Loud on stderr, then carry on without a picture.
-let AVATAR_URL: string | null = null;
-try {
-  AVATAR_URL = resolveAvatarUrl(AVATAR);
-} catch (err) {
-  console.error(`Ignoring AVATAR — ${errMessage(err)}`);
-}
+// Resolved at startup, alongside the USERNAME/API_KEY guard above, so a typo'd
+// AVATAR fails the run loudly rather than being quietly dropped. Nothing is
+// lost by aborting: `data` covers the last REPORT_DAYS (28 by default), so the
+// next run after the fix re-sends the same window. Resolved at the top of
+// main() rather than here so a bad value reaches the `Fatal:` handler and the
+// operator gets the message instead of a module-load stack trace.
 
 function readMachineId(): string | null {
   try {
@@ -275,6 +268,7 @@ interface ReportBody {
 }
 
 async function main(): Promise<void> {
+  const AVATAR_URL = resolveAvatarUrl(AVATAR);
   const REPORT_DAYS = parseInt(process.env.REPORT_DAYS || "", 10) || 28;
   // Two date windows: `sinceStr` bounds `body.data` (daily usage rows,
   // merged per-date by the server — short windows safe), `statsSinceStr`
