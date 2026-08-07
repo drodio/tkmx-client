@@ -315,35 +315,31 @@ test("an unset AVATAR is left out of the POST entirely", async () => {
   }
 });
 
-test("a malformed AVATAR aborts the run with no POST", async () => {
+test("a malformed AVATAR aborts before posting, without echoing its value", async () => {
+  // Two contracts, one run, because a credential-bearing value exercises both.
+  //
   // Fail-fast per REVIEW.md: a typo'd avatar is a config error the operator can
   // fix, and nothing is lost by stopping — `data` covers the last REPORT_DAYS,
   // so the next run after the fix re-sends the same window.
-  const ctx = await setupE2E({ dailyJson: '{"daily":[]}' });
-  try {
-    const result = await runReporter({ ...ctx.baseEnv, AVATAR: "http://example.com/me.png" });
-    assert.notEqual(result.status, 0, "reporter must exit non-zero on a malformed AVATAR");
-    assert.equal(ctx.getCaptured(), null, "no POST may be sent when AVATAR is malformed");
-    assert.match(result.stderr, /must be https/i, `expected a clear reason, got:\n${result.stderr}`);
-  } finally {
-    ctx.cleanup();
-  }
-});
-
-test("a malformed AVATAR never echoes its value into the logs", async () => {
-  // stderr on an installed client is an unattended launchd/systemd log, and the
-  // malformed case is exactly the one that can still carry a password — a URL
-  // with credentials that fails to parse reaches the error path with the secret
-  // intact. Nothing the operator typed may be echoed back.
+  //
+  // And no-echo: stderr on an installed client is an unattended launchd/systemd
+  // log, and a malformed value is exactly the case that can still carry a
+  // password — `https://user:pw@` fails to parse and reaches the error path
+  // with the secret intact.
+  //
+  // Which reason each malformed *form* produces is covered per-branch in
+  // test/avatar.test.ts; what only an end-to-end run can show is that the
+  // process stops, nothing is POSTed, and the value never reaches a log.
   const ctx = await setupE2E({ dailyJson: '{"daily":[]}' });
   try {
     const result = await runReporter({ ...ctx.baseEnv, AVATAR: "https://user:hunter2@" });
     assert.notEqual(result.status, 0, "reporter must exit non-zero on a malformed AVATAR");
+    assert.equal(ctx.getCaptured(), null, "no POST may be sent when AVATAR is malformed");
+    assert.match(result.stderr, /AVATAR is not a URL/i, `expected a generic reason, got:\n${result.stderr}`);
     assert.ok(
       !result.stderr.includes("hunter2") && !result.stdout.includes("hunter2"),
       `the AVATAR value leaked into the logs:\n${result.stderr}${result.stdout}`,
     );
-    assert.match(result.stderr, /AVATAR is not a URL/i, `expected a generic reason, got:\n${result.stderr}`);
   } finally {
     ctx.cleanup();
   }
