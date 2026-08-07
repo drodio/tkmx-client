@@ -414,17 +414,19 @@ async function main(): Promise<void> {
   if (!COMMUNITIES) console.log(`  Set COMMUNITIES in .env — which dev communities you're part of`);
   if (!ABOUT) console.log(`  Set ABOUT in .env — a short description for your profile page`);
   if (!DEMO_VIDEO_URL) console.log(`  Set DEMO_VIDEO_URL in .env — a 3-min demo of your AI workflow`);
-  // Without this the nudges above contradict .env.example, which tells a
-  // multi-machine operator to leave these blank on every machine but one — and
-  // then this machine nags them to fill them in every two hours, forever.
-  if (!TOOLS || !PROJECTS || !COMMUNITIES || !ABOUT || !DEMO_VIDEO_URL) {
-    console.log(`  (Reporting from more than one machine? Set those on one machine only — blank here means "leave my profile alone".)`);
-  }
-
   if (!HN_USERNAME) {
     console.log(`  Set HN_USERNAME in .env to appear on the Builder Index`);
   } else {
     console.log(`  Verify your HN account on your Builder Index profile (${profileUrl}) to appear on the Builder Index`);
+  }
+
+  // Printed after ALL six nudges, and covering all six, because every one of
+  // these fields is omitted when blank. Without it the nudges contradict
+  // .env.example, which tells a multi-machine operator to leave them blank on
+  // every machine but one — and then this machine nags them to fill them in
+  // every two hours, forever.
+  if (!TOOLS || !PROJECTS || !COMMUNITIES || !ABOUT || !DEMO_VIDEO_URL || !HN_USERNAME) {
+    console.log(`  (Reporting from more than one machine? Set the fields above on one machine only — blank here means "leave my profile alone".)`);
   }
 
   if (response && response.client_update) {
