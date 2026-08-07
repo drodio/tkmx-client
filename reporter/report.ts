@@ -45,24 +45,28 @@ const API_KEY = process.env.API_KEY;
 // hint — is driven from this array, so "did I cover all of them?" stops being a
 // question you answer by reading several lists and hoping they match.
 //
-// The value is read through the env name it sits next to rather than paired by
-// hand, so a row can't post one field's value under another field's key. Trimmed
-// here, so a key left blank in .env — which is how .env.example ships every one
-// of them — reads as "not configured" for the payload and for the nudge alike,
+// Each key's env name is DERIVED, not paired alongside it — every one of these
+// is just the key uppercased — so there is no second list of names to keep in
+// step and no way for a row to read one field's env var under another's key.
+// Values are trimmed, so a key left blank in .env (how .env.example ships every
+// one of them) reads as "not configured" for the payload and the nudge alike,
 // rather than as an empty value worth posting.
 //
-// `nudge` is null for hn_username because it has its own two-branch message
-// below (set vs. unset); it still belongs here for the payload and the hint.
-type ProfileKey = "tools" | "communities" | "projects" | "about" | "hn_username" | "demo_video_url";
-const PROFILE_FIELDS = ([
-  { key: "tools",          env: "TOOLS",          nudge: "which AI tools you use daily (e.g. superpowers,paperclip)" },
-  { key: "projects",       env: "PROJECTS",       nudge: "what you're spending tokens on (e.g. tkmx,plow.co)" },
-  { key: "communities",    env: "COMMUNITIES",    nudge: "which dev communities you're part of" },
-  { key: "about",          env: "ABOUT",          nudge: "a short description for your profile page" },
-  { key: "demo_video_url", env: "DEMO_VIDEO_URL", nudge: "a 3-min demo of your AI workflow" },
-  { key: "hn_username",    env: "HN_USERNAME",    nudge: null },
-] as { key: ProfileKey; env: string; nudge: string | null }[])
-  .map((f) => ({ ...f, value: (process.env[f.env] || "").trim() }));
+// hn_username's nudge is null because it has its own two-branch message below
+// (set vs. unset); it still belongs here for the payload and the hint.
+const PROFILE_NUDGES = {
+  tools: "which AI tools you use daily (e.g. superpowers,paperclip)",
+  projects: "what you're spending tokens on (e.g. tkmx,plow.co)",
+  communities: "which dev communities you're part of",
+  about: "a short description for your profile page",
+  demo_video_url: "a 3-min demo of your AI workflow",
+  hn_username: null,
+} as const;
+type ProfileKey = keyof typeof PROFILE_NUDGES;
+const PROFILE_FIELDS = Object.entries(PROFILE_NUDGES).map(([key, nudge]) => {
+  const env = key.toUpperCase();
+  return { key: key as ProfileKey, env, nudge, value: (process.env[env] || "").trim() };
+});
 
 // The one field also read outside the array, for its set/unset nudge pair.
 const HN_USERNAME = PROFILE_FIELDS.find((f) => f.key === "hn_username")!.value;
