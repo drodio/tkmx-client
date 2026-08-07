@@ -47,7 +47,10 @@ const PROJECTS = process.env.PROJECTS || "";
 const ABOUT = process.env.ABOUT || "";
 const HN_USERNAME = process.env.HN_USERNAME || "";
 const DEMO_VIDEO_URL = process.env.DEMO_VIDEO_URL || "";
-const AVATAR = process.env.AVATAR || "";
+// Trimmed on read so the nudge below and resolveAvatarUrl (which trims) agree
+// on what "not configured" means — AVATAR="   " would otherwise send nothing
+// while also suppressing the nudge telling you it sent nothing.
+const AVATAR = (process.env.AVATAR || "").trim();
 const EXTRA_CLAUDE_CONFIGS = process.env.EXTRA_CLAUDE_CONFIGS || "";
 const EXTRA_CODEX_CONFIGS = process.env.EXTRA_CODEX_CONFIGS || "";
 

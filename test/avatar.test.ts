@@ -57,8 +57,15 @@ for (const [name, input, reason] of [
   });
 }
 
-test("the not-a-URL error names the accepted forms", () => {
-  assert.throws(() => resolveAvatarUrl("me.png"), /gravatar:|github:|https/);
+test("the not-a-URL error names all three accepted forms", () => {
+  // An alternation would pass on any one of them — including the unrelated
+  // "must be https" text — so require each form individually.
+  assert.throws(() => resolveAvatarUrl("me.png"), (err: Error) => {
+    for (const form of ["https", "gravatar:", "github:"]) {
+      assert.ok(err.message.includes(form), `error should name ${form}, got: ${err.message}`);
+    }
+    return true;
+  });
 });
 
 test("gravatar: uses d=404 so a missing Gravatar falls back to the profile's own avatar", () => {
