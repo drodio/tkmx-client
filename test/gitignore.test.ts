@@ -49,7 +49,12 @@ function checkIgnore(relativePath: string, opts: { rulesOnly: boolean }): boolea
   try {
     execFileSync("git", args, { cwd: REPO_ROOT, stdio: "ignore" });
     return true;
-  } catch {
+  } catch (err) {
+    // Exit 1 is the real answer "not ignored". Anything else is git failing
+    // (128 when there's no work tree, for instance), and swallowing that would
+    // make the NEGATIVE assertion below pass vacuously — it cannot otherwise
+    // tell "the rules re-admit this file" from "git never ran".
+    if ((err as { status?: number }).status !== 1) throw err;
     return false;
   }
 }
