@@ -8,6 +8,8 @@ import { resolveAvatarUrl } from "../reporter/avatar";
 const TEST_EMAIL_SHA256 =
   "973dfe463ec85785f5f95af5ba3906eedb2d931c24e69824a89ea65dba4e813b";
 const GRAVATAR = `https://www.gravatar.com/avatar/${TEST_EMAIL_SHA256}?s=256&d=404`;
+// Sentinel carried by the credential-bearing rejection rows; no error may echo it.
+const SECRET = "hunter2";
 
 for (const [name, input, expected] of [
   ["unset is no avatar", "", null],
@@ -51,26 +53,21 @@ for (const [name, input, reason] of [
   ["github: with a space", "github:has space", /github:/],
   ["github: with a slash", "github:has/slash", /github:/],
   ["github: over 39 chars", `github:${"a".repeat(40)}`, /github:/],
+  // One credential-bearing input per branch. The caller writes these errors to
+  // an unattended launchd/systemd log, so no branch may echo the value — and a
+  // malformed value is exactly the case that can still carry a password.
+  ["a URL that fails to parse, carrying credentials", `https://user:${SECRET}@`, /is not a URL/],
+  ["gravatar: carrying credentials", `gravatar:https://u:${SECRET}@h`, /gravatar:/],
+  ["github: carrying credentials", `github:u:${SECRET}@h`, /github:/],
 ] as const) {
   test(`rejected — ${name}`, () => {
-    assert.throws(() => resolveAvatarUrl(input), reason);
-  });
-}
-
-// Every rejection path, not just the URL one. The rows above match on
-// /gravatar:/ and /github:/, which the old `got "${email}"` messages satisfied
-// too — so without these, restoring an interpolation leaves the suite green.
-// A credential-bearing value reaches each of these branches and the error is
-// written to an unattended log by the caller.
-for (const [name, input] of [
-  ["a URL that fails to parse", "https://user:hunter2@"],
-  ["a gravatar: value that isn't an email", "gravatar:https://u:hunter2@h"],
-  ["a github: value that isn't a username", "github:u:hunter2@h"],
-] as const) {
-  test(`never echoes the value back — ${name}`, () => {
     assert.throws(() => resolveAvatarUrl(input), (err: Error) => {
+      // Both properties on every row, so a branch added later inherits the
+      // no-echo guarantee from the row it already has to write. Keeping them in
+      // separate tables is how the gravatar echo escaped the first round.
+      assert.match(err.message, reason);
       assert.ok(
-        !err.message.includes("hunter2"),
+        !err.message.includes(SECRET),
         `error echoed the operator's value: ${err.message}`,
       );
       return true;
