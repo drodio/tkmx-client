@@ -1,0 +1,73 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import * as path from "node:path";
+
+const REPO_ROOT = path.join(__dirname, "..", "..");
+
+// A single `.env*` rule covers `.env` itself and every backup spelling of it,
+// and `!.env.example` re-admits the tracked template. Both halves matter: this
+// repo is public, so an untracked `.env*` holding a live API_KEY is one
+// `git add -A` away from publishing a credential — while over-broad ignoring
+// would quietly drop the template from the repo.
+//
+// The two lists below assert those halves. They test real `git check-ignore`
+// behaviour rather than matching literal .gitignore lines, so reformatting the
+// file cannot silently drop either guarantee.
+const MUST_BE_IGNORED = [
+  ".env",
+  ".env.bak-20260724",
+  ".env.bak-concierge-20260806-021701",
+  // Hand-rolled backups don't follow one convention, so cover the class.
+  ".env.bak",
+  ".env.backup",
+  ".env.old",
+  ".env.2",
+  ".env.save",
+];
+
+// The template is the one .env* file that must stay committable.
+const MUST_NOT_BE_IGNORED = [".env.example"];
+
+// `git check-ignore` exits 0 when the path is ignored, 1 when it is not.
+//
+// The two call sites want DIFFERENT questions answered, which is why the
+// --no-index flag is a per-case decision rather than a constant:
+//
+//   index-aware (default) — "would this file escape into a commit?" A *tracked*
+//     path is reported as not-ignored regardless of the rules, so a backup that
+//     somehow got staged trips the alarm. This is what the secret files need.
+//
+//   rules-only (--no-index) — "do the ignore rules exclude this?" Needed for a
+//     file that is already tracked, where the index-aware answer is a foregone
+//     "not ignored" and would make the assertion vacuous.
+function checkIgnore(relativePath: string, opts: { rulesOnly: boolean }): boolean {
+  const args = ["check-ignore", "--quiet"];
+  if (opts.rulesOnly) args.push("--no-index");
+  args.push(relativePath);
+
+  try {
+    execFileSync("git", args, { cwd: REPO_ROOT, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+test("backups of .env are git-ignored so a credential can't be committed", () => {
+  for (const candidate of MUST_BE_IGNORED) {
+    assert.ok(
+      checkIgnore(candidate, { rulesOnly: false }),
+      `${candidate} must be git-ignored — it contains a live API_KEY and this repo is public`,
+    );
+  }
+});
+
+test(".env.example stays committable despite the broad .env* rule", () => {
+  for (const candidate of MUST_NOT_BE_IGNORED) {
+    assert.ok(
+      !checkIgnore(candidate, { rulesOnly: true }),
+      `${candidate} must NOT be excluded by the ignore rules — the .env* rule needs its "!" negation intact`,
+    );
+  }
+});
