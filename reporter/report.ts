@@ -50,6 +50,24 @@ const PROJECTS = (process.env.PROJECTS || "").trim();
 const ABOUT = (process.env.ABOUT || "").trim();
 const HN_USERNAME = (process.env.HN_USERNAME || "").trim();
 const DEMO_VIDEO_URL = (process.env.DEMO_VIDEO_URL || "").trim();
+
+// The profile-prose set, declared once. Everything that has to agree on which
+// fields these are — what gets posted, which nudges fire, and the multi-machine
+// hint — is driven from this array, so "did I cover all of them?" stops being a
+// question you answer by reading four lists and hoping they match.
+//
+// `nudge` is null for hn_username because it has its own two-branch message
+// below (set vs. unset); it still belongs here for the payload and the hint.
+type ProfileKey = "tools" | "communities" | "projects" | "about" | "hn_username" | "demo_video_url";
+const PROFILE_FIELDS: { key: ProfileKey; env: string; value: string; nudge: string | null }[] = [
+  { key: "tools",          env: "TOOLS",          value: TOOLS,          nudge: "which AI tools you use daily (e.g. superpowers,paperclip)" },
+  { key: "projects",       env: "PROJECTS",       value: PROJECTS,       nudge: "what you're spending tokens on (e.g. tkmx,plow.co)" },
+  { key: "communities",    env: "COMMUNITIES",    value: COMMUNITIES,    nudge: "which dev communities you're part of" },
+  { key: "about",          env: "ABOUT",          value: ABOUT,          nudge: "a short description for your profile page" },
+  { key: "demo_video_url", env: "DEMO_VIDEO_URL", value: DEMO_VIDEO_URL, nudge: "a 3-min demo of your AI workflow" },
+  { key: "hn_username",    env: "HN_USERNAME",    value: HN_USERNAME,    nudge: null },
+];
+
 const EXTRA_CLAUDE_CONFIGS = process.env.EXTRA_CLAUDE_CONFIGS || "";
 const EXTRA_CODEX_CONFIGS = process.env.EXTRA_CODEX_CONFIGS || "";
 
@@ -352,22 +370,15 @@ async function main(): Promise<void> {
   // Profile prose comes from THIS machine's .env, but the profile it lands on is
   // shared by every machine reporting under this username. Sending "" for a field
   // nobody on this machine has configured is at best meaningless and at worst
-  // destructive, so send nothing at all: an omitted key expresses no opinion and
-  // leaves whatever the server already holds.
+  // destructive, so send nothing at all.
   //
-  // What the server does with a value that IS sent varies by field and isn't
-  // knowable from here — `tools` is known to merge rather than replace, and the
-  // scalar fields are unverified — which is exactly why this side declines to
-  // guess. Omitting is the only behaviour that's correct under either semantics.
-  //
-  // The upshot for a second machine: leave these blank in its .env and it will
-  // report your usage without expressing an opinion about your profile.
-  if (TOOLS) body.tools = TOOLS;
-  if (COMMUNITIES) body.communities = COMMUNITIES;
-  if (PROJECTS) body.projects = PROJECTS;
-  if (ABOUT) body.about = ABOUT;
-  if (HN_USERNAME) body.hn_username = HN_USERNAME;
-  if (DEMO_VIDEO_URL) body.demo_video_url = DEMO_VIDEO_URL;
+  // What the server does with what it receives isn't knowable from here — `tools`
+  // is known to merge rather than replace, and the scalar fields are unverified —
+  // which is exactly why this side declines to guess. Omitting an unconfigured
+  // field is the only behaviour that's correct under either semantics.
+  for (const f of PROFILE_FIELDS) {
+    if (f.value) body[f.key] = f.value;
+  }
   if (agentsviewVersion) body.agentsview_version = agentsviewVersion;
   const machineConfig = collectMachineConfig();
   if (machineConfig) body.machine_config = machineConfig;
@@ -409,23 +420,20 @@ async function main(): Promise<void> {
   const profileUrl = `https://www.watchmepivot.com/builder-index/u/${USERNAME}`;
   console.log(`  Profile: ${profileUrl}`);
 
-  if (!TOOLS) console.log(`  Set TOOLS in .env — which AI tools you use daily (e.g. superpowers,paperclip)`);
-  if (!PROJECTS) console.log(`  Set PROJECTS in .env — what you're spending tokens on (e.g. tkmx,plow.co)`);
-  if (!COMMUNITIES) console.log(`  Set COMMUNITIES in .env — which dev communities you're part of`);
-  if (!ABOUT) console.log(`  Set ABOUT in .env — a short description for your profile page`);
-  if (!DEMO_VIDEO_URL) console.log(`  Set DEMO_VIDEO_URL in .env — a 3-min demo of your AI workflow`);
+  for (const f of PROFILE_FIELDS) {
+    if (!f.value && f.nudge) console.log(`  Set ${f.env} in .env — ${f.nudge}`);
+  }
   if (!HN_USERNAME) {
     console.log(`  Set HN_USERNAME in .env to appear on the Builder Index`);
   } else {
     console.log(`  Verify your HN account on your Builder Index profile (${profileUrl}) to appear on the Builder Index`);
   }
 
-  // Printed after ALL six nudges, and covering all six, because every one of
-  // these fields is omitted when blank. Without it the nudges contradict
-  // .env.example, which tells a multi-machine operator to leave them blank on
-  // every machine but one — and then this machine nags them to fill them in
-  // every two hours, forever.
-  if (!TOOLS || !PROJECTS || !COMMUNITIES || !ABOUT || !DEMO_VIDEO_URL || !HN_USERNAME) {
+  // Printed after every nudge and covering the whole set, because all of these
+  // are omitted when blank. Without it the nudges contradict .env.example, which
+  // tells a multi-machine operator to leave them blank on every machine but one
+  // — and then this machine nags them to fill them in every two hours, forever.
+  if (PROFILE_FIELDS.some((f) => !f.value)) {
     console.log(`  (Reporting from more than one machine? Set the fields above on one machine only — blank here means "leave my profile alone".)`);
   }
 
