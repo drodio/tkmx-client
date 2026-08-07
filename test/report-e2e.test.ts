@@ -282,6 +282,7 @@ test(".env USERNAME beats inherited OS USERNAME", async () => {
 // mask an "unconfigured machine" regression.
 const PROFILE_PROSE_KEYS = ["tools", "communities", "projects", "about", "hn_username", "demo_video_url"];
 const MINIMAL_ENV = "USERNAME=e2euser\nAPI_KEY=e2ekey\nCLIENT_ID=e2e-client-id-fixed\n";
+const MULTI_MACHINE_HINT = "Reporting from more than one machine?";
 
 for (const tc of [
   {
@@ -292,12 +293,43 @@ for (const tc of [
     env: { TOOLS: "   " },  // whitespace-only counts as unconfigured
     present: {},
     absent: PROFILE_PROSE_KEYS,
+    // Every field is unconfigured, so every nudge fires — including
+    // HN_USERNAME's, whose omission from the hint was a real bug twice.
+    stdoutHas: [
+      "Set TOOLS in .env",
+      "Set PROJECTS in .env",
+      "Set COMMUNITIES in .env",
+      "Set ABOUT in .env",
+      "Set DEMO_VIDEO_URL in .env",
+      "Set HN_USERNAME in .env",
+      MULTI_MACHINE_HINT,
+    ],
+    stdoutLacks: [],
   },
   {
     name: "sends what is configured, trimmed, and still omits the rest",
     env: { TOOLS: "Sparkle.ai,Zight", ABOUT: "  padded on both sides  " },
     present: { tools: "Sparkle.ai,Zight", about: "padded on both sides" },
     absent: ["projects", "communities", "hn_username", "demo_video_url"],
+    // A configured field stops nagging; the hint still fires because others
+    // are still blank — that condition was wrong twice, so pin it.
+    stdoutHas: ["Set PROJECTS in .env", "Set HN_USERNAME in .env", MULTI_MACHINE_HINT],
+    stdoutLacks: ["Set TOOLS in .env", "Set ABOUT in .env"],
+  },
+  {
+    // The precise regression: HN_USERNAME was left out of the hint's condition
+    // twice, so a machine with everything BUT it configured got no hint at all.
+    // Every other row still passes with hn_username missing from that
+    // condition, because something else is blank; only this one catches it.
+    name: "hint still fires when hn_username is the only blank field",
+    env: {
+      TOOLS: "Sparkle.ai", PROJECTS: "tkmx", COMMUNITIES: "hn",
+      ABOUT: "about me", DEMO_VIDEO_URL: "https://youtu.be/x",
+    },
+    present: { tools: "Sparkle.ai", projects: "tkmx" },
+    absent: ["hn_username"],
+    stdoutHas: ["Set HN_USERNAME in .env", MULTI_MACHINE_HINT],
+    stdoutLacks: ["Set TOOLS in .env", "Set PROJECTS in .env", "Set ABOUT in .env"],
   },
 ]) {
   test(`profile prose payload — ${tc.name}`, async () => {
@@ -320,6 +352,16 @@ for (const tc of [
           !(key in captured),
           `unconfigured "${key}" must be absent, not sent as "" — an empty value expresses an opinion this machine doesn't have. Got: ${JSON.stringify(captured[key])}`,
         );
+      }
+      // The nudges and the multi-machine hint are the surface that has to stay
+      // consistent with the payload rule above — a field that's omitted must
+      // also be nudged for, and the hint must fire whenever any of them is
+      // blank. Asserting on stdout is what pins that, rather than a manual diff.
+      for (const line of tc.stdoutHas) {
+        assert.ok(result.stdout.includes(line), `stdout should contain "${line}".\nGot:\n${result.stdout}`);
+      }
+      for (const line of tc.stdoutLacks) {
+        assert.ok(!result.stdout.includes(line), `stdout should NOT contain "${line}".\nGot:\n${result.stdout}`);
       }
       // Sanity: an otherwise-normal report, so this can't pass because the
       // reporter bailed out before building a body.

@@ -40,33 +40,32 @@ const USERNAME = process.env.TKMX_USERNAME || ENV_FILE.USERNAME;
 const SERVER_URL = process.env.SERVER_URL || "https://tokenmaxxing.odio.dev";
 const TEAM = process.env.TEAM || "default";
 const API_KEY = process.env.API_KEY;
-// Profile prose. Trimmed on read so that a key left blank in .env — which is
-// how .env.example ships every one of them — reads as "not configured" both
-// here and in the nudges at the end of main(), rather than as an empty value
-// worth posting. See the omission logic where `body` is built.
-const TOOLS = (process.env.TOOLS || "").trim();
-const COMMUNITIES = (process.env.COMMUNITIES || "").trim();
-const PROJECTS = (process.env.PROJECTS || "").trim();
-const ABOUT = (process.env.ABOUT || "").trim();
-const HN_USERNAME = (process.env.HN_USERNAME || "").trim();
-const DEMO_VIDEO_URL = (process.env.DEMO_VIDEO_URL || "").trim();
-
 // The profile-prose set, declared once. Everything that has to agree on which
 // fields these are — what gets posted, which nudges fire, and the multi-machine
 // hint — is driven from this array, so "did I cover all of them?" stops being a
-// question you answer by reading four lists and hoping they match.
+// question you answer by reading several lists and hoping they match.
+//
+// The value is read through the env name it sits next to rather than paired by
+// hand, so a row can't post one field's value under another field's key. Trimmed
+// here, so a key left blank in .env — which is how .env.example ships every one
+// of them — reads as "not configured" for the payload and for the nudge alike,
+// rather than as an empty value worth posting.
 //
 // `nudge` is null for hn_username because it has its own two-branch message
 // below (set vs. unset); it still belongs here for the payload and the hint.
 type ProfileKey = "tools" | "communities" | "projects" | "about" | "hn_username" | "demo_video_url";
-const PROFILE_FIELDS: { key: ProfileKey; env: string; value: string; nudge: string | null }[] = [
-  { key: "tools",          env: "TOOLS",          value: TOOLS,          nudge: "which AI tools you use daily (e.g. superpowers,paperclip)" },
-  { key: "projects",       env: "PROJECTS",       value: PROJECTS,       nudge: "what you're spending tokens on (e.g. tkmx,plow.co)" },
-  { key: "communities",    env: "COMMUNITIES",    value: COMMUNITIES,    nudge: "which dev communities you're part of" },
-  { key: "about",          env: "ABOUT",          value: ABOUT,          nudge: "a short description for your profile page" },
-  { key: "demo_video_url", env: "DEMO_VIDEO_URL", value: DEMO_VIDEO_URL, nudge: "a 3-min demo of your AI workflow" },
-  { key: "hn_username",    env: "HN_USERNAME",    value: HN_USERNAME,    nudge: null },
-];
+const PROFILE_FIELDS = ([
+  { key: "tools",          env: "TOOLS",          nudge: "which AI tools you use daily (e.g. superpowers,paperclip)" },
+  { key: "projects",       env: "PROJECTS",       nudge: "what you're spending tokens on (e.g. tkmx,plow.co)" },
+  { key: "communities",    env: "COMMUNITIES",    nudge: "which dev communities you're part of" },
+  { key: "about",          env: "ABOUT",          nudge: "a short description for your profile page" },
+  { key: "demo_video_url", env: "DEMO_VIDEO_URL", nudge: "a 3-min demo of your AI workflow" },
+  { key: "hn_username",    env: "HN_USERNAME",    nudge: null },
+] as { key: ProfileKey; env: string; nudge: string | null }[])
+  .map((f) => ({ ...f, value: (process.env[f.env] || "").trim() }));
+
+// The one field also read outside the array, for its set/unset nudge pair.
+const HN_USERNAME = PROFILE_FIELDS.find((f) => f.key === "hn_username")!.value;
 
 const EXTRA_CLAUDE_CONFIGS = process.env.EXTRA_CLAUDE_CONFIGS || "";
 const EXTRA_CODEX_CONFIGS = process.env.EXTRA_CODEX_CONFIGS || "";
